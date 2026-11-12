@@ -1,0 +1,106 @@
+IAFM source validation - 2026-11-11
+
+HISTORICAL CHECKPOINT within 11 November: the counts, WAR digest and XA design
+below describe the earlier compatibility-validation run. New development now
+uses transaction.backend=atomic, one InnoDB transaction for both logical schemas,
+strict controller permit/GTID confirmation and no cross-JVM XA recovery. Legacy
+replicated JDBC/XA startup is refused; legacy file XA is isolated-rehearsal only.
+Read ATOMIC_REPLICATED_TRANSACTIONS.md and the latest server acceptance record.
+No local test result alone opens production writes.
+
+Scope and current limits
+1. This is a source/build record. Server deployment and two-host acceptance must
+   be established by the current server audit. Historical validation documents
+   describe earlier software and a single active coordinator.
+2. The legacy logical-shard identity contract is preserved. No business rows,
+   user identities, configuration secrets or transaction stores were overwritten.
+3. FinanceCluster still serializes through one canonical CLUSTER_GATE and uses
+   Narayana XA with a local process lock. Its current architecture has not been
+   demonstrated safe for simultaneous active coordinators on distinct MySQL
+   members. A JVM monitor and SELECT FOR UPDATE do not establish a cross-member
+   lock. Do not enable two writers by changing only replication settings.
+4. Production writes must stay closed until actual MySQL 26.10.0, fencing,
+   durable two-copy acknowledgements, concurrent coordinator recovery, ingress,
+   uncertain outcomes and controlled rejoin tests have passed in both directions.
+5. In JDBC decision-store mode, startup checks every table in both logical
+   application schemas and the JDBC decision-store schema and rejects CASCADE, SET NULL and SET DEFAULT foreign-key
+   actions. This is a necessary prerequisite, not proof of multi-primary safety.
+6. New ledger schemas no longer create ON DELETE CASCADE. Existing ledger cleanup
+   explicitly deletes entries before journals and users in the business
+   transaction. CREATE TABLE IF NOT EXISTS leaves existing constraints unchanged.
+   Existing databases therefore need a separate verified maintenance migration.
+   Stop writers; take and restore an off-server backup; inspect SHOW CREATE TABLE
+   and INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS; rehearse constraint replacement
+   and deletion/rollback on an isolated copy; compare all rows, journal balances,
+   keys and constraints; only then schedule production migration. MySQL DDL is
+   implicitly committed. Never disable foreign_key_checks to bypass validation.
+
+Completed local changes and checks
+1. Java production/test Servlet references migrated from javax.servlet to
+   jakarta.servlet. web.xml uses Jakarta Servlet 6.1. javax.sql, javax.naming,
+   javax.crypto and javax.transaction.xa remain Java SE APIs.
+2. Servlet API 6.1.0 is provided by Tomcat and excluded from the WAR.
+   Connector/J was updated to 26.10.0; Java remains 21.
+3. mvn -B clean verify passed: 137 tests, 0 failures, 0 errors, 3 conditional
+   MySQL-only skips. The skipped cases were mixed-collation restored data,
+   separate-process ID allocation, and a MySQL-specific identity migration.
+   Normal database fixtures use isolated H2. This does not certify MySQL behavior.
+4. python3 -m unittest discover -s src/test/python passed: 36 tests,
+   6 optional MySQL integration skips.
+5. Node tests for operations and connection-status passed: 16 tests, no skips.
+6. Added synthetic tests for cascade/update/set-null rejection on all tables,
+   empty metadata rejection, restricted parent deletion and explicit child
+   cleanup. Existing business rollback, journal, idempotency and XA tests pass.
+7. WAR: target/Investment_and_Financial_Management.war
+   SHA-256: c7521063f46d15fea4b212402accf9259ded6f00cb14bf9c8b9eca2bf556c5be
+   A later build may have a different archive digest; verify the artifact that is
+   actually transferred and tested.
+
+Explicit current-MySQL integration harness
+1. src/test/java/DatabaseService/CurrentMySqlValidationHarness.java is opt-in.
+   It requires a disposable MySQL 26.10 engine reached through a loopback port.
+   It does not read production configuration or accept an existing schema name.
+2. Supply IAFM_VALIDATION_MYSQL_BASE=jdbc:mysql://127.0.0.1:PORT/,
+   IAFM_VALIDATION_MYSQL_USER, IAFM_VALIDATION_MYSQL_PASSWORD and an absolute
+   IAFM_VALIDATION_WORK_DIR through the process environment. The password must
+   exist in the environment even when deliberately empty for an isolated engine.
+   Never put actual credentials in shell history, source, command arguments or
+   this document. Use a private subprocess environment or an interactive prompt.
+3. From the project directory, compile tests and build the dependency classpath:
+   mvn -B test-compile dependency:build-classpath -Dmdep.includeScope=test -Dmdep.outputFile=/ABSOLUTE/WORK/iafm-test-classpath.txt
+4. Run exactly one explicit rehearsal:
+   java -cp "target/test-classes:target/classes:$(cat /ABSOLUTE/WORK/iafm-test-classpath.txt)" DatabaseService.CurrentMySqlValidationHarness --run-isolated-validation
+5. The harness creates randomly named finance_validation_<UUID>_1/2 schemas.
+   It checks real foreign-key metadata, cascade rejection, database rollback,
+   conversion to restrictive foreign keys without changing fixture rows,
+   application XA commit/rollback on two logical schemas, idempotent replay,
+   changed-payload rejection, and committed/aborted result lookup.
+6. A successful run drops only those generated schemas and its generated
+   synthetic transaction-store directory. A failed run retains them for review
+   and reports their exact names. Inspect XA recovery state before any cleanup.
+7. On 2026-11-11 the harness passed separately on both physical servers using
+   each server's disposable loopback MySQL 26.10.0 instance (port 23516), Java
+   21.0.13.0.3 and Connector/J 26.10.0. Both runners returned exit code zero for
+   all checks listed above. Class/driver digests matched the local artifacts.
+   No production database, main MySQL service or Tomcat service was modified.
+8. The first rehearsal exposed MySQL error 1826 when a single ALTER statement
+   dropped and added the same foreign-key constraint name. The harness now uses
+   a different name for the replacement restrictive constraint. Both complete
+   rehearsals then passed. This does not certify a production migration.
+9. Successful rehearsals cleaned their generated schemas and transaction stores.
+   The earlier failed schemas contained only the inspected synthetic FK fixtures;
+   after XA RECOVER returned empty, those exact schemas were also removed.
+   No generated transaction-store directories remained.
+10. These are separate one-engine checks with two disposable logical schemas per
+    engine, not cross-host replication, replicated decision-store recovery,
+    authority, ingress authentication, failover or crash-recovery acceptance.
+    The optional mixed-collation, separate-process ID, identity-migration and
+    Python MySQL tests skipped in the local suite have not been certified by
+    this minimal harness.
+
+Primary technical references checked on 2026-11-11
+https://tomcat.apache.org/migration-11.0.html
+https://tomcat.apache.org/migration-10.html
+https://dev.mysql.com/doc/relnotes/connector-j/en/news-26-10-0.html
+https://dev.mysql.com/doc/connector-j/en/connector-j-versions.html
+https://dev.mysql.com/doc/refman/26.10/en/group-replication-limitations.html

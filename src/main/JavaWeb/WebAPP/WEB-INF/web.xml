@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee https://jakarta.ee/xml/ns/jakartaee/web-app_6_1.xsd"
+         version="6.1">
+  <distributable/>
+  <display-name>Finance Workspace — Investment &amp; Financial Management</display-name>
+  <listener><listener-class>DatabaseService.DatabaseInit</listener-class></listener>
+  <welcome-file-list>
+    <welcome-file>index.html</welcome-file>
+  </welcome-file-list>
+  <session-config>
+    <session-timeout>10</session-timeout>
+    <cookie-config>
+      <http-only>true</http-only>
+      <secure>true</secure>
+    </cookie-config>
+    <tracking-mode>COOKIE</tracking-mode>
+  </session-config>
+  <error-page><error-code>404</error-code><location>/errors/404.html</location></error-page>
+  <error-page><error-code>500</error-code><location>/errors/500.html</location></error-page>
+  <security-constraint>
+    <web-resource-collection>
+      <web-resource-name>Public registration disabled</web-resource-name>
+      <url-pattern>/register</url-pattern>
+    </web-resource-collection>
+    <auth-constraint/>
+  </security-constraint>
+</web-app>

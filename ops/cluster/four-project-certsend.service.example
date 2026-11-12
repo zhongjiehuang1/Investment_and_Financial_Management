@@ -1,0 +1,16 @@
+[Unit]
+Description=Retry encrypted application certificate synchronization
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/lib/four-project-cluster/certificate_sync.py send --config /etc/four-project-certsync/config.json
+CapabilityBoundingSet=
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=128M
+TimeoutStartSec=45

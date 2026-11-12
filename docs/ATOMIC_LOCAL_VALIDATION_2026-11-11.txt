@@ -1,0 +1,116 @@
+IAFM atomic source validation checkpoint - 11 November 2026
+
+Status
+This is a source/build and isolated MySQL component checkpoint, not production
+acceptance. Formal writes remain closed. Protocol-2 normal-GR metadata/account
+migration and both-node protected config switching completed, with original
+business/identity/historical receipt projections unchanged and same-permit
+controller GTID dual durability confirmations. Finance WAR/testclasses were
+staged on both nodes; Tomcat and entry were not started by this work.
+Actual component tests now passed on both MySQL26.10 members: equal writes,
+same-ID replay/conflict, sequential and overlapping stale snapshots, own-JVM
+loss before/after commit, original interrupted login IDs, current credential
+rotation/revalidation, shared twenty-attempt limit and negative receipt replay.
+Full HTTP startup/functions, actual deleted-cookie recovery after simultaneous
+both-JVM session loss, entry/session forwarding, controller fault matrix and
+restore acceptance remain open. Component tests do not substitute for these.
+
+Implemented
+- One physical InnoDB transaction spans two logical schemas, receipt and result;
+  atomic mode does not run cross-JVM Narayana/XA orphan recovery. Strict authority
+  permits, precommit identity and postcommit GTID confirmation remain mandatory.
+- SQL/schema/connection wrappers prevent inner commit/close escape, unsafe SQL,
+  reconnect and unapproved canonical legacy/JNDI/direct database access.
+- Shared SQL login budgets and immutable attempts persist 401/429; replay does
+  not recount and a former success must revalidate current password/generation.
+- Protocol 2 adds a mandatory original read-snapshot token for all business
+  mutations. DATA_REVISION CAS rejects stale sequential forms, not only genuinely
+  overlapping database transactions. Browser rows/forms retain their original
+  snapshot. Old same-ID payload receipts are resolved first; no automatic stale
+  form resubmission or new operation identity is invented.
+- New deletion receipts retain only a cookie/UUID/owner-generation HMAC digest
+  and seven-day expiry. Original HttpOnly cookie plus UUID can query the one
+  committed deletion after both JVMs lose sessions. Response is minimal, current
+  durability is confirmed, and ordinary authentication is never restored.
+- User session serialization retains identity/preferences only, with initialized
+  caches and per-request database identity checks; session-touch does not recreate
+  invalid sessions. Tomcat replication itself requires separate live acceptance.
+- UTC SQL session validation and receipt timestamp checks remain active.
+- Runtime recovery probes genuinely read marker, gate, identities and essential
+  business tables under a stable authority; no guard write or /ready recursion.
+- Lab entry configuration uses active HTTP/database/controller probes, stale-state
+  refusal, equal upstreams, sticky cookie/peer fallback, and no transparent POST
+  replay. Star pre-body per-entry limits bound file/guest/provider concurrency;
+  actual two-entry temporary-file/heap capacity still requires live measurement.
+- Maintenance helper prepares separate explicit preflight, normal-GR metadata,
+  writer-credential fencing and per-node private config-switch phases. It starts
+  no service, preserves historical HMAC keys, and compares business/ID/old-receipt
+  projections. The normal-GR canonical and both node config-switch phases completed; no service was started.
+
+Local checks
+- mvn --batch-mode -q verify: 187 tests; 0 failures; 0 errors; 3 pre-existing
+  conditional real-MySQL skips. H2 tests are not proof of MySQL GR behavior.
+- Node --test src/test/js/*.test.cjs: 31 passed, no failures or skips.
+- Entry Python tests: 10 passed; migration helper Python tests: 9 passed;
+  helper/orchestrator py_compile
+  passed. The isolated remote orchestrator now passed against protocol 2; see the actual component record below.
+- New tests cover stale edit/delete/missing revision/old receipt replay, unchanged
+  revision on session actions, marker changes on an already-live service,
+  session-loss deletion recovery, wrong cookie/UUID/owner/endpoint, expiry,
+  restored old identity refusal, restricted immutable receipt permissions,
+  serialization and refusal to recreate/re-authorize invalid sessions.
+
+Actual protocol-2 MySQL evidence and limits
+- The original failed login UUID 5668611a-c9af-41ea-a4dc-56d1cb5e3fb3 and
+  successful UUID fa411c88-8b80-4a75-a158-c23b589c50f2 were queried/replayed on both
+  physical nodes without creating new attempts. Current-password rotation and
+  restoration proved an old successful receipt cannot restore an old credential.
+- Both-node SQL shared twenty-attempt budget/429 and duplicate negative replay
+  passed. Synthetic fixture password was restored to its original value.
+- Distinct writes and cross reads, concurrent same-ID once, changed payload409,
+  genuinely overlapping own-JVM barriers, stale loser409 with confirmed ABSENT,
+  explicit reviewed new intent, sequential stale mutation refusal, own-JVM kill
+  before commit/whole rollback and after commit/before confirmation all passed.
+- Unlike protocol 1, the stale overlapping loser is not automatically applied
+  using a newer snapshot. Original payload remains stale; explicit reload and a
+  new reviewed intent are necessary. This avoids silent overwrites.
+- Final fixture logical balances were 128/128, committed operation count 18 and
+  business DATA_REVISION 10. Both authorities remained dual (epochs106/111), with
+  no active atomic workers and application/entry services stopped afterward.
+- Canonical and peer table counts remained 28/23; fixture schemas 13/8. New role
+  table privileges exactly matched the locked old role; TLS was required. Original
+  HMAC lines were preserved verbatim. All historic receipt new columns are NULL.
+- Evidence filenames: finance-protocol-two-canonical-node1.json,
+  finance-protocol-two-node2-peer-verified.json,
+  finance-protocol-two-switch-node1.json / -node2.json,
+  finance-real-acceptance-ed855d7b-1209-46d5-acf2-ccc3e911e666.json (login),
+  finance-real-acceptance-e2fdeccc-89cd-488c-9f9a-c818a061e29a.json (business),
+  finance-protocol-two-complete-state.json. Private configs/journals are600/640;
+  no password, private key or authentication token belongs in ordinary records.
+- Earlier protocol-1 COMMIT HY000/1180 was not independently established as a
+  certification-counter event. Do not convert that older observation into a
+  mechanism claim or claim measured takeover latency from these component runs.
+- Prepared HTTP launcher and matrix remain unexecuted. Expiry/owner/endpoint
+  administrative synthetic-receipt mutation requires a separate explicit window.
+
+Build output
+The actual remote component checkpoint used 0b39bff...aaabfd. The candidate below
+adds expiry enforcement to the live-session deletion-proof path, private HTTP
+NO_PROXY and strict seven-field confirmation including controller boot identity; it passed the
+full 187 local Java tests, but its affected HTTP expiry behavior remains pending.
+  target/Investment_and_Financial_Management.war
+  SHA256 c85879ea1e1c6637684b9250ba7af7cf58fc186c8452960b5a170d10a645fff9
+Verify the exact artifact independently after transfer. Source code, local tests
+or old fixture evidence do not authorize opening formal writes.
+
+Private-transport checkpoint
+- Explicit Java Proxy.NO_PROXY and Python ProxyHandler({})/NoRedirect prevent
+  default proxy routing. Poisoned ProxySelector/proxy-environment tests passed.
+- Confirmation missing/changed/duplicate/swapped fields fail closed, including
+  well-formed MySQL UUID/ControllerBootID swaps. Six-field capture is rejected.
+- The Python helper used for the completed migration remains archived privately
+  under its historical cbab hash; no SQL was repeated for this transport change.
+- The new candidate/maintenance helper still require a separately authorized
+  transfer and affected actual controller/HTTP handshake tests. Current actual
+  server/fault-matrix state is recorded by the root coordinator, not inferred
+  from the earlier normal-DUAL component checkpoint.

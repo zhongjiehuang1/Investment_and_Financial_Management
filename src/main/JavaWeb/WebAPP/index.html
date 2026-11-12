@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Finance Workspace is a private, bilingual investment and financial management workspace.">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>Finance Workspace — Investment & Financial Management</title>
+  <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="assets/css/app.css">
+  <script src="assets/js/connection-status.js" defer></script>
+  <script src="assets/js/operations.js" defer></script>
+  <script src="assets/js/login-operations.js" defer></script>
+  <script src="assets/js/snapshots.js" defer></script>
+  <script src="assets/js/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
+  <div id="connectionStatus" class="connection-status">
+    <span id="serverIdentity" class="server-identity" role="status" aria-live="polite">Server connection unconfirmed</span>
+    <p id="serverOutage" class="server-outage" role="alert" hidden>Server unavailable. Please wait for recovery.</p>
+  </div>
+  <div id="ambient" aria-hidden="true">
+    <span class="orb orb-one"></span><span class="orb orb-two"></span><span class="grid-glow"></span>
+  </div>
+  <div id="app" aria-live="polite"></div>
+  <div id="toastRegion" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
+  <div id="modalRoot"></div>
+  <div id="cookieControls"></div>
+  <noscript>
+    <main class="noscript"><h1>Finance Workspace requires JavaScript</h1><p>Please enable JavaScript to use the financial dashboard.</p></main>
+  </noscript>
+</body>
+</html>

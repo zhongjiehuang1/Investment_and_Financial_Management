@@ -1,0 +1,7 @@
+[Unit]
+Description=Validate incoming private app certificate renewals
+[Path]
+PathChanged=/var/lib/cluster-certsync/incoming.json
+Unit=four-project-certsync.service
+[Install]
+WantedBy=multi-user.target

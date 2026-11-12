@@ -1,0 +1,9 @@
+[Unit]
+Description=Retry certificate synchronization after peer outages
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+Unit=four-project-certsend.service
+[Install]
+WantedBy=timers.target

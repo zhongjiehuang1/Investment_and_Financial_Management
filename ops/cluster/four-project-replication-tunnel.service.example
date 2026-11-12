@@ -1,0 +1,24 @@
+# Staging example only: do not install until the loopback ports, both MySQL
+# members, host keys and restricted SSH forwarding permissions are provisioned.
+# Node 1 MySQL/XCom: 3306/33061; node 2 MySQL/XCom: 3307/33062.
+[Unit]
+Description=Private bidirectional four-project replication and application tunnel
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=cluster-tunnel
+Group=cluster-tunnel
+ExecStart=/usr/bin/ssh -N -T -F /dev/null -i /etc/four-project-tunnel/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/four-project-tunnel/known_hosts -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=10 -L 127.0.0.1:3307:127.0.0.1:3307 -L 127.0.0.1:33062:127.0.0.1:33062 -L 127.0.0.1:9412:127.0.0.1:9411 -L 127.0.0.1:18081:127.0.0.1:8080 -R 127.0.0.1:3306:127.0.0.1:3306 -R 127.0.0.1:33061:127.0.0.1:33061 -R 127.0.0.1:9412:127.0.0.1:9411 -R 127.0.0.1:18081:127.0.0.1:8080 cluster-tunnel@@REMOTE_HOST@
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+MemoryMax=128M
+[Install]
+WantedBy=multi-user.target
