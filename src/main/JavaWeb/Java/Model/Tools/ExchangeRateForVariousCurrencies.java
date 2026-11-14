@@ -12,12 +12,28 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
     public record RateSnapshot(double gbpToCny, String source, String updatedAt) {}
     private java.util.Timer timer;
     private static volatile RateSnapshot rates = initialRates();
-    private record ConversionSnapshot(RateSnapshot legacy, java.util.Map<String, Double> usd) {}
+    private record ConversionSnapshot(RateSnapshot legacy, ExchangeRate.DailySnapshot provider) {}
     private static final ThreadLocal<ConversionSnapshot> PINNED = new ThreadLocal<>();
 
     public static double getGbpToCny() { return getSnapshot().gbpToCny(); }
     public static String getRateSource() { return getSnapshot().source(); }
     public static String getLastUpdatedAt() { return getSnapshot().updatedAt(); }
+    public static ExchangeRate.DailySnapshot getProviderSnapshot() {
+        ConversionSnapshot pinned = PINNED.get();
+        return pinned == null ? ExchangeRate.captureSnapshot() : pinned.provider();
+    }
+    public static org.json.JSONObject referenceMetadata() {
+        RateSnapshot legacy = getSnapshot(); ExchangeRate.DailySnapshot provider = getProviderSnapshot();
+        boolean manual = "manual".equals(legacy.source());
+        String asOf = provider.asOf(), fetched = provider.fetchedAt();
+        if (manual) { asOf = null; fetched = null; } // A configured value has no claimed provider reference date.
+        boolean stale = asOf != null && java.time.LocalDate.parse(asOf).isBefore(java.time.LocalDate.now(java.time.ZoneOffset.UTC).minusDays(2));
+        return new org.json.JSONObject().put("source", manual ? "manual" : provider.source())
+                .put("asOf", asOf == null ? org.json.JSONObject.NULL : asOf)
+                .put("fetchedAt", fetched == null ? org.json.JSONObject.NULL : fetched)
+                .put("referenceSha256", provider.sha256() == null || manual ? org.json.JSONObject.NULL : provider.sha256())
+                .put("referenceOnly", true).put("stale", stale);
+    }
     public static RateSnapshot getSnapshot() { ConversionSnapshot pinned = PINNED.get(); return pinned == null ? rates : pinned.legacy; }
 
     private static ConversionSnapshot captureConversionSnapshot() {
@@ -28,10 +44,10 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
             // from the independently refreshed legacy cache's earlier generation.
             double gbp = provider.values().getOrDefault("GBP", 0.0), cny = provider.values().getOrDefault("CNY", 0.0);
             legacy = gbp > 0 && cny > 0
-                    ? new RateSnapshot(cny / gbp, "exchangerate-api", provider.updatedAt())
+                    ? new RateSnapshot(cny / gbp, provider.source(), provider.updatedAt())
                     : new RateSnapshot(0, "unavailable", provider.updatedAt());
         }
-        return new ConversionSnapshot(legacy, provider.values());
+        return new ConversionSnapshot(legacy, provider);
     }
     public static final class RatePin implements AutoCloseable {
         private final ConversionSnapshot previous;
@@ -84,11 +100,12 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
     private static void getExchangeRateForVariousCurrencies() {
         if ("manual".equals(rates.source())) return;
         ExchangeRate.getExchangeRate();
-        ExchangeRate.UsdRates refreshed = ExchangeRate.getLatestRates();
-        if (refreshed.gbp() > 0 && refreshed.cny() > 0) {
-            double ratio = refreshed.cny() / refreshed.gbp();
+        ExchangeRate.DailySnapshot refreshed = ExchangeRate.captureSnapshot();
+        double gbp = refreshed.values().getOrDefault("GBP", 0.0), cny = refreshed.values().getOrDefault("CNY", 0.0);
+        if (gbp > 0 && cny > 0) {
+            double ratio = cny / gbp;
             if (Double.isFinite(ratio) && ratio > 0 && Double.isFinite(1.0 / ratio)) {
-                rates = new RateSnapshot(ratio, "exchangerate-api", refreshed.updatedAt());
+                rates = new RateSnapshot(ratio, refreshed.source(), refreshed.updatedAt());
             }
         }
     }
@@ -108,7 +125,7 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
             ratio = "CNY".equals(currencyCurrentChosen) ? snapshot.gbpToCny() : 1.0 / snapshot.gbpToCny();
         } else {
             // Both sides come from the same immutable daily USD snapshot.
-            java.util.Map<String, Double> all = captured.usd;
+            java.util.Map<String, Double> all = captured.provider().values();
             double from = all.getOrDefault(currencyType, 0.0), to = all.getOrDefault(currencyCurrentChosen, 0.0);
             if (from <= 0 || to <= 0) throw new Computing.ExchangeRateUnavailableException();
             ratio = to / from;

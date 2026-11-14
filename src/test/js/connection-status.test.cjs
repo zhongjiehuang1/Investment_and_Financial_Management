@@ -33,7 +33,7 @@ function fixture(handler = url => response(url.endsWith('/server') ? {serverId: 
 }
 
 test('both numeric server IDs are localized and no infrastructure value is displayed', async () => {
-    for (const id of [1, 2, 3, 10]) {
+    for (const id of [1, 2]) {
         const f = fixture(url => response(url.endsWith('/server') ? {serverId: id, hostname: 'private-host'} : {status: 'ready'}));
         await flush();
         assert.equal(f.badge.textContent, `Connected to server ${id}`);
@@ -44,7 +44,7 @@ test('both numeric server IDs are localized and no infrastructure value is displ
 });
 
 test('invalid IDs and identity errors leave an honest unknown state without marking a healthy cluster down', async () => {
-    for (const invalid of [{serverId: '1'}, {serverId: 0}, {serverId: -1}, {serverId: 1.5}, {}, null]) {
+    for (const invalid of [{serverId: '1'}, {serverId: 0}, {serverId: -1}, {serverId: 1.5}, {serverId: 3}, {serverId: 10}, {}, null]) {
         const f = fixture(url => response(url.endsWith('/server') ? invalid : {status: 'ready'}));
         await flush();
         assert.equal(f.badge.textContent, 'Server connection unconfirmed');
@@ -128,17 +128,19 @@ test('timeouts fail closed, parallel refreshes deduplicate, and later GET probes
     assert.equal(f.calls.length, 4);
 });
 
-test('single-copy health is visible without claiming unavailability or two-copy protection', async () => {
-    let single = true;
+test('ready single-database mode has no degradation banner, while failures stay visible', async () => {
     const f = fixture(url => response(url.endsWith('/server') ? {serverId: 2}
-        : {status: 'ready', replicationMode: single ? 'single' : 'dual', degraded: single}));
+        : {status: 'ready', replicationMode: 'single', degraded: true}));
     await flush();
-    assert.equal(f.banner.hidden, false);
-    assert.equal(f.banner.textContent, 'Single-copy degraded mode. New changes currently have one data copy.');
-    f.window.FinanceConnectionStatus.setLanguage('zh');
-    assert.equal(f.banner.textContent, '单副本降级运行：新操作暂时只有一份数据副本。');
-    f.window.FinanceConnectionStatus.reportUnavailable();
-    assert.equal(f.banner.textContent, '服务器故障，请等待恢复');
-    single = false; f.poll(); await flush();
     assert.equal(f.banner.hidden, true);
+    assert.equal(f.banner.textContent, '');
+    f.window.FinanceConnectionStatus.setLanguage('zh');
+    assert.equal(f.banner.hidden, true);
+    assert.equal(f.banner.textContent, '');
+    f.window.FinanceConnectionStatus.reportUnavailable();
+    assert.equal(f.banner.hidden, false);
+    assert.equal(f.banner.textContent, '服务器故障，请等待恢复');
+    f.poll(); await flush();
+    assert.equal(f.banner.hidden, true);
+    assert.equal(f.banner.textContent, '');
 });

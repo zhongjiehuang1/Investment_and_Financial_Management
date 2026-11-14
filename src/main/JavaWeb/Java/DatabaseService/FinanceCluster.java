@@ -17,16 +17,23 @@ import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /** Atomic replicated transactions, with an explicitly separate legacy XA backend. */
 public final class FinanceCluster implements AutoCloseable {
     @FunctionalInterface public interface Work { JSONObject run() throws Exception; }
     private static volatile FinanceCluster instance;
+    private static final BoundedAdmission startupAdmission = new BoundedAdmission();
     private static volatile boolean shuttingDown;
     private final Properties config;
     private final XaTransactions transactions;
     private final AtomicFinanceTransactions atomic;
     private final ScheduledExecutorService recovery;
+    public static final class Busy extends RuntimeException { }
+    private final BoundedAdmission admission = new BoundedAdmission();
+    private static final long PAGE_READ_WAIT_MILLIS=2000;
+    private final java.util.concurrent.Semaphore pageReaders = new java.util.concurrent.Semaphore(2,true);
+    private final ReentrantReadWriteLock atomicProbeLifecycle = new ReentrantReadWriteLock(true);
     private volatile boolean recovered;
     private volatile boolean executing;
     private volatile boolean closing;
@@ -36,7 +43,8 @@ public final class FinanceCluster implements AutoCloseable {
         String value=System.getProperty(key); if(value==null)value=System.getenv(env);
         return value==null||value.isBlank()?fallback:value;
     }
-    public static synchronized FinanceCluster get() {
+    public static FinanceCluster get() {
+        try(var entry=startupAdmission.enter()) {
         if(shuttingDown||!enabled()||ClusterAvailability.passive()||!DatabaseInit.clusterSchemaReady())throw new ClusterAvailability.Unavailable();
         if(instance==null)try {
             Properties properties=new Properties();
@@ -44,7 +52,50 @@ public final class FinanceCluster implements AutoCloseable {
             instance=new FinanceCluster(properties);
         } catch(Exception failure) { throw new ClusterAvailability.Unavailable(); }
         return instance;
+        }
     }
+    /** Explicit mode only; unreadable or invalid configuration fails readiness closed. */
+    public static boolean singleDatabaseSelected() {
+        if (!enabled()) return false;
+        FinanceCluster current=instance;
+        if(current!=null) return AtomicFinanceTransactions.singleDatabase(current.config);
+        Properties properties=new Properties();
+        try(var reader=Files.newBufferedReader(Path.of(setting("iafm.cluster.config","IAFM_CLUSTER_CONFIG","/etc/iafm/cluster.properties")))) {
+            properties.load(reader);
+        } catch(Exception failure) { throw new IllegalStateException("Cluster configuration is unavailable",failure); }
+        return AtomicFinanceTransactions.singleDatabase(properties);
+    }
+
+    /** This HTTP admission applies only to the explicitly enabled shared four-slot pool. */
+    public static boolean boundedSingleDatabasePoolSelected() {
+        if(!enabled())return false;
+        FinanceCluster current=instance;
+        Properties properties=current==null?new Properties():current.config;
+        if(current==null)try(var reader=Files.newBufferedReader(Path.of(setting("iafm.cluster.config","IAFM_CLUSTER_CONFIG","/etc/iafm/cluster.properties")))) {
+            properties.load(reader);
+        } catch(Exception failure) { throw new IllegalStateException("Cluster configuration is unavailable",failure); }
+        return boundedSingleDatabasePoolSelected(properties);
+    }
+    static boolean boundedSingleDatabasePoolSelected(Properties properties) {
+        if(!AtomicFinanceTransactions.enabled(properties))return false;
+        boolean single=AtomicFinanceTransactions.singleDatabase(properties);
+        String pool=properties.getProperty("atomic.single.pool.enabled","false").trim();
+        if(!Set.of("true","false").contains(pool)||("true".equals(pool)&&!single))
+            throw new IllegalArgumentException("Invalid single database pool setting");
+        return single&&"true".equals(pool);
+    }
+
+    /** Uses the real pinned-database SQL probe, not the retired replication observer. */
+    public static boolean singleDatabaseReady() {
+        try {
+            if(!singleDatabaseSelected())return false;
+            if(ShardScope.isActive())try(Statement query=ShardScope.current().connection(1).createStatement();ResultSet rows=query.executeQuery("SELECT 1")) {
+                return rows.next() && rows.getInt(1)==1;
+            }
+            return get().recoveryProbe();
+        } catch(Exception failure) { return false; }
+    }
+
     private FinanceCluster(Properties properties)throws Exception {
         this(properties,AtomicFinanceTransactions.enabled(properties)?Map.of():sources(properties));
     }
@@ -62,6 +113,7 @@ public final class FinanceCluster implements AutoCloseable {
         if(AtomicFinanceTransactions.enabled(properties)) {
             if(required("idempotency.secret").length()<32)throw new IllegalStateException("Incomplete idempotency configuration.");
             atomic=new AtomicFinanceTransactions(properties);
+            atomic.warmStartup();
             atomic.initialize();
             transactions=null;recovery=null;recovered=true;
             return;
@@ -128,11 +180,20 @@ public final class FinanceCluster implements AutoCloseable {
         }
     }
     public boolean recoveryReady() { return !closing && (recovered || executing); }
-    /** Private controller recovery must not depend on the /ready admission it enables. */
-    public synchronized boolean recoveryProbe() throws Exception {
+    /** Isolated test injection; public startup still performs atomic.initialize(). */
+    FinanceCluster(Properties properties, AtomicFinanceTransactions service) {
+        config=properties;atomic=Objects.requireNonNull(service);transactions=null;recovery=null;recovered=true;
+    }
+    /** Atomic recovery owns an independent read-only connection, not the business monitor. */
+    public boolean recoveryProbe() throws Exception {
+        if(atomic==null) try(var entry=admission.internal()) { return recoveryReady(); }
         if(!recoveryReady())return false;
-        if(atomic!=null)atomic.recoveryProbe();
-        return recoveryReady();
+        atomicProbeLifecycle.readLock().lockInterruptibly();
+        try {
+            if(!recoveryReady())return false;
+            atomic.recoveryProbe();
+            return recoveryReady();
+        } finally { atomicProbeLifecycle.readLock().unlock(); }
     }
     public String durabilityMode() throws SQLException {
         if(closing)throw new SQLException("Finance is closing");
@@ -140,7 +201,8 @@ public final class FinanceCluster implements AutoCloseable {
     }
     public boolean atomicMode(){return atomic!=null;}
     public record LoginOutcome(JSONObject response,Model.User user,int httpStatus) { }
-    public synchronized LoginOutcome login(HttpServletRequest request,String client,String email,String password)throws Exception{
+    public LoginOutcome login(HttpServletRequest request,String client,String email,String password)throws Exception{
+        try (var entry = admission.enter()) {
         if(closing||atomic==null||!recovered)throw new ClusterAvailability.Unavailable();
         ClusterAvailability.requireReady();
         String operation=request.getHeader("X-IAFM-Operation-Id");
@@ -154,8 +216,11 @@ public final class FinanceCluster implements AutoCloseable {
             LoginOutcome result=atomic.login(operation.toLowerCase(Locale.ROOT),clientHash,emailHash,payloadHash,normalized,password);
             ClusterAvailability.requireReady();return result;
         }finally{executing=false;}
+    
+        }
     }
-    public synchronized JSONObject loginStatus(String operation,String client,String email)throws Exception{
+    public JSONObject loginStatus(String operation,String client,String email)throws Exception{
+        try (var entry = admission.enter()) {
         if(closing||atomic==null||!recovered)throw new ClusterAvailability.Unavailable();
         ClusterAvailability.requireReady();
         if(!RequestIdentity.validGeneration(operation))throw new ApiSupport.Failure(400,"A valid sign-in operation identity is required.");
@@ -163,8 +228,11 @@ public final class FinanceCluster implements AutoCloseable {
         JSONObject result=atomic.loginStatus(operation.toLowerCase(Locale.ROOT),requestHash("/login-client",new JSONObject().put("client",client)),
                 requestHash("/login-email",new JSONObject().put("emailAddress",normalized)));
         ClusterAvailability.requireReady();return result;
+    
+        }
     }
-    private synchronized void recoverSafely() {
+    private void recoverSafely() {
+        try (var entry = admission.internal()) {
         if(closing){recovered=false;return;}
         // Atomic replicated transactions are recovered by InnoDB. Never scan
         // or abort another JVM's logical operation through the old XA journal.
@@ -178,6 +246,8 @@ public final class FinanceCluster implements AutoCloseable {
             if(transactions.hasOutstandingDecisions()){recovered=false;return;}
             recovered=true;
         } catch(Exception failure) { recovered=false; /* Keep the durable gate for the next scan. */ }
+    
+        }
     }
     private record Branch(int node,int format,byte[] global,byte[] branch,String key,String terminal) implements Xid {
         public int getFormatId(){return format;} public byte[] getGlobalTransactionId(){return global.clone();} public byte[] getBranchQualifier(){return branch.clone();}
@@ -247,7 +317,22 @@ public final class FinanceCluster implements AutoCloseable {
         }catch(java.security.GeneralSecurityException impossible){throw new IllegalStateException(impossible);}
     }
 
-    public synchronized JSONObject run(HttpServletRequest request,Model.User user,JSONObject input,boolean mutation,Work work)throws Exception {
+    public JSONObject run(HttpServletRequest request,Model.User user,JSONObject input,boolean mutation,Work work)throws Exception {
+        boolean eligiblePage=atomic!=null&&!mutation&&user!=null&&"/pageData".equals(request.getServletPath());
+        // Choose once before DB/RPC. No transaction failure ever changes this decision.
+        BoundedAdmission.Entry immediate=eligiblePage?admission.tryImmediate():null;
+        if(eligiblePage&&immediate==null) {
+            if(closing||!recovered)throw new ClusterAvailability.Unavailable();
+            boolean slot=false,life=false;
+            try {
+                slot=pageReaders.tryAcquire(PAGE_READ_WAIT_MILLIS,TimeUnit.MILLISECONDS);if(!slot)throw new Busy();
+                life=atomicProbeLifecycle.readLock().tryLock(BoundedAdmission.WAIT_MILLIS,TimeUnit.MILLISECONDS);if(!life)throw new Busy();
+                if(closing||!recovered)throw new ClusterAvailability.Unavailable();
+                ClusterAvailability.requireReady();JSONObject page=atomic.pageSnapshot(user,ingress(request),work);ClusterAvailability.requireReady();return page;
+            } catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new Busy();}
+            finally {if(life)atomicProbeLifecycle.readLock().unlock();if(slot)pageReaders.release();}
+        }
+        try (var entry = immediate!=null?immediate:admission.enter()) {
         if(closing)throw new ClusterAvailability.Unavailable();
         ClusterAvailability.requireReady();
         if(atomic!=null) {
@@ -326,6 +411,8 @@ public final class FinanceCluster implements AutoCloseable {
         // a result until the current replication view is authorized again.
         ClusterAvailability.requireReady();return committed;
         } finally { executing=false; }
+    
+        }
     }
     private JSONObject existing(String operation,String owner,String hash)throws SQLException {
         try(Connection connection=raw(1);PreparedStatement statement=connection.prepareStatement("SELECT OWNER_KEY,REQUEST_HASH,STATE FROM CLUSTER_OPERATIONS WHERE ID=?")) {
@@ -340,21 +427,28 @@ public final class FinanceCluster implements AutoCloseable {
             statement.setString(1,operation);try(ResultSet result=statement.executeQuery()){if(!result.next())throw new SQLException("Missing committed result.");return new JSONObject(result.getString(1));}
         }
     }
-    public synchronized JSONObject deletedUserStatus(Model.User actor,String operation)throws Exception{
+    public JSONObject deletedUserStatus(Model.User actor,String operation)throws Exception{
+        try (var entry = admission.enter()) {
         if(closing||atomic==null||!recovered)throw new ClusterAvailability.Unavailable();
         if(actor==null||actor.getId()<=0||!RequestIdentity.validGeneration(actor.getGeneration())||!RequestIdentity.validGeneration(operation))throw new ApiSupport.Failure(400,"Invalid deletion result proof.");
         ClusterAvailability.requireReady();
         JSONObject result=atomic.deletedUserStatus(actor,operation.toLowerCase(Locale.ROOT));
         ClusterAvailability.requireReady();return result.optBoolean("notDeleted",false)?null:result;
+    
+        }
     }
-    public synchronized JSONObject deletedUserCookieStatus(HttpServletRequest request,String operation)throws Exception{
+    public JSONObject deletedUserCookieStatus(HttpServletRequest request,String operation)throws Exception{
+        try (var entry = admission.enter()) {
         if(closing||atomic==null||!recovered)throw new ClusterAvailability.Unavailable();
         if(!RequestIdentity.validGeneration(operation))throw new ApiSupport.Failure(400,"Invalid deletion result proof.");
         String cookie=DeletionResultCapability.cookie(request,false);if(cookie==null)return null;
         ClusterAvailability.requireReady();JSONObject result=atomic.deletedUserCookieStatus(cookie,operation.toLowerCase(Locale.ROOT));
         ClusterAvailability.requireReady();return result;
+    
+        }
     }
-    public synchronized JSONObject status(Model.User user,String operation)throws SQLException {
+    public JSONObject status(Model.User user,String operation)throws SQLException {
+        try (var entry = admission.enter()) {
         if(atomic!=null) {
             try { return atomic.status(user,operation); }
             catch(SQLException|RuntimeException failure){throw failure;}
@@ -370,6 +464,8 @@ public final class FinanceCluster implements AutoCloseable {
         if("committed".equals(response.getString("state")))try(Connection connection=raw(1);PreparedStatement statement=connection.prepareStatement("SELECT PAYLOAD FROM CLUSTER_RESULTS WHERE OPERATION_ID=?")) {
             statement.setString(1,operation);try(ResultSet result=statement.executeQuery()){if(!result.next())throw new SQLException("Missing committed operation result.");response.put("result",new JSONObject(result.getString(1)));}
         }return response;
+    
+        }
     }
     private final class Journal implements XaTransactions.Journal {
         public void uid(String operation,String uid)throws Exception {try(Connection connection=raw(1)){execute(connection,"UPDATE CLUSTER_OPERATIONS SET TRANSACTION_UID=? WHERE ID=?",uid,operation);}}
@@ -379,18 +475,21 @@ public final class FinanceCluster implements AutoCloseable {
     }
     public static void shutdown() {
         FinanceCluster prior;
-        synchronized(FinanceCluster.class){shuttingDown=true;prior=instance;}
+        try(var entry=startupAdmission.internal()){shuttingDown=true;prior=instance;}
         if(prior!=null)try{prior.close();}catch(Exception ignored){/* Keep the process lock if draining failed. */}
     }
     @Override public void close()throws Exception {
         closing=true;recovered=false;
         if(atomic!=null) {
-            synchronized(this){ /* Drain local atomic work; no recovery ownership survives the connection. */ }
+            try(var entry=admission.internal()){ /* Drain local atomic work; no recovery ownership survives the connection. */ }
+            if(!atomicProbeLifecycle.writeLock().tryLock(30,TimeUnit.SECONDS))
+                throw new IllegalStateException("Atomic recovery probes did not drain; readiness remains closed.");
+            try {atomic.closePool();} finally {atomicProbeLifecycle.writeLock().unlock();}
             return;
         }
         recovery.shutdownNow();
-        synchronized(this){ /* Drain the executing operation before closing XA resources. */ }
+        try(var entry=admission.internal()){ /* Drain the executing operation before closing XA resources. */ }
         if(!recovery.awaitTermination(30,TimeUnit.SECONDS))throw new IllegalStateException("Recovery did not drain; coordinator ownership is retained.");
-        synchronized(this){transactions.close();}
+        try(var entry=admission.internal()){transactions.close();}
     }
 }

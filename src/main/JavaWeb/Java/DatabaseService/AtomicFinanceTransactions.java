@@ -29,6 +29,13 @@ final class AtomicFinanceTransactions {
     private final Authority authority;
     private final Connections connections;
     private final AtomicLoginAttempts logins;
+    private final SingleDatabasePool pool;
+    private static SingleDatabasePool sharedSinglePool;
+    private static synchronized SingleDatabasePool sharedPool(String url,String user,String password,String catalog){
+        if(sharedSinglePool==null)sharedSinglePool=new SingleDatabasePool(url,user,password,catalog);
+        else if(!sharedSinglePool.matches(url,user,password,catalog))throw new IllegalStateException("Single database pool configuration changed; restart required");
+        return sharedSinglePool;
+    }
 
     static boolean enabled(Properties properties) {
         String mode = properties.getProperty("transaction.backend", "xa");
@@ -37,7 +44,18 @@ final class AtomicFinanceTransactions {
     }
 
     AtomicFinanceTransactions(Properties properties) {
-        this(properties, schemas(properties), new AtomicReplicationPermit(properties), null);
+        this(properties, schemas(properties), authority(properties), null);
+    }
+
+    static boolean singleDatabase(Properties properties) {
+        String mode=properties.getProperty("atomic.deployment", "replicated");
+        if (!Set.of("replicated", "single-database").contains(mode))
+            throw new IllegalArgumentException("Unknown atomic deployment mode");
+        return mode.equals("single-database");
+    }
+
+    private static Authority authority(Properties properties) {
+        return singleDatabase(properties) ? new SingleDatabaseAuthority(properties) : new AtomicReplicationPermit(properties);
     }
 
     AtomicFinanceTransactions(Properties properties, Authority authority) {
@@ -56,19 +74,35 @@ final class AtomicFinanceTransactions {
         if (!RequestIdentity.validGeneration(migration)) throw new IllegalArgumentException("Explicit atomic migration identity is required");
         this.authority = Objects.requireNonNull(authority);
         this.logins = Objects.requireNonNull(logins);
+        String poolSetting=config.getProperty("atomic.single.pool.enabled","false").trim();
+        if(!Set.of("true","false").contains(poolSetting)||("true".equals(poolSetting)&&!singleDatabase(config)))throw new IllegalArgumentException("Invalid single database pool setting");
+        pool="true".equals(poolSetting)&&supplied==null?sharedPool(transactionUrl(required(config,"node1.url")).replace("socketTimeout=90000","socketTimeout=15000"),required(config,"node1.user"),Objects.requireNonNull(config.getProperty("node1.password")),canonicalSchema):null;
         connections = supplied != null ? supplied : proof -> {
-            Connection database = DriverManager.getConnection(transactionUrl(required(config, "node1.url")),
-                    required(config, "node1.user"), Objects.requireNonNull(config.getProperty("node1.password")));
+            String url=transactionUrl(required(config,"node1.url"));
+            if(singleDatabase(config))url=url.replace("socketTimeout=90000","socketTimeout=15000");
+            String boundedUrl=url;
+            Connection database = pool!=null?pool.open():singleDatabase(config)
+                    ? BoundedDatabaseConnections.open(()->DriverManager.getConnection(boundedUrl,required(config,"node1.user"),Objects.requireNonNull(config.getProperty("node1.password"))))
+                    : DriverManager.getConnection(boundedUrl,required(config,"node1.user"),Objects.requireNonNull(config.getProperty("node1.password")));
             try {
-                try (Statement query = database.createStatement()) { query.execute("SET SESSION group_replication_consistency='BEFORE_AND_AFTER'"); }
-                ReplicationDatabaseIdentity.verify(database, proof.mysqlUuid());
-                verifyDurability(database);
+                if (singleDatabase(config)) {
+                    SingleDatabaseAuthority.verifyDatabase(database, proof.mysqlUuid());
+                } else {
+                    try (Statement query = database.createStatement()) { query.execute("SET SESSION group_replication_consistency='BEFORE_AND_AFTER'"); }
+                    ReplicationDatabaseIdentity.verify(database, proof.mysqlUuid());
+                    verifyDurability(database);
+                }
                 return database;
             } catch (SQLException | RuntimeException failure) {
+                if(pool!=null)pool.discard(database);
                 try { database.close(); } catch (SQLException closing) { failure.addSuppressed(closing); }
                 throw failure;
             }
         };
+    }
+    void closePool(){if(pool!=null)pool.close();}
+    void warmStartup()throws SQLException {
+        if(pool!=null)StartupWarmup.run(this::recoveryProbe,pool::retire,25_000,4_000);
     }
 
     static void verifyDurability(Connection database) throws SQLException {
@@ -90,7 +124,7 @@ final class AtomicFinanceTransactions {
     static String transactionUrl(String original) {
         String[] parts = original.split("\\?", 2);
         Set<String> controlled = Set.of("connecttimeout", "sockettimeout", "pinglobaltxtophysicalconnection",
-                "databaseterm", "allowmultiqueries", "useserverprepstmts", "cacheprepstmts", "autoreconnect",
+                "databaseterm", "allowmultiqueries", "useserverprepstmts", "cacheprepstmts", "prepstmtcachesize", "prepstmtcachesqllimit", "autoreconnect",
                 "autoreconnectforpools", "reconnectattxend", "servertimezone", "connectiontimezone", "forceconnectiontimezonetosession", "preserveinstants");
         List<String> parameters = new ArrayList<>();
         if (parts.length == 2) for (String parameter : parts[1].split("&")) {
@@ -98,17 +132,36 @@ final class AtomicFinanceTransactions {
             if (!controlled.contains(key)) parameters.add(parameter);
         }
         parameters.addAll(List.of("connectTimeout=3000", "socketTimeout=90000", "pinGlobalTxToPhysicalConnection=true",
-                "databaseTerm=CATALOG", "allowMultiQueries=false", "useServerPrepStmts=true", "cachePrepStmts=false",
+                "databaseTerm=CATALOG", "allowMultiQueries=false", "useServerPrepStmts=true", "cachePrepStmts=true", "prepStmtCacheSize=64", "prepStmtCacheSqlLimit=4096",
                 "autoReconnect=false", "autoReconnectForPools=false", "reconnectAtTxEnd=false",
                 "connectionTimeZone=UTC", "forceConnectionTimeZoneToSession=true", "preserveInstants=true"));
         return parts[0] + "?" + String.join("&", parameters);
     }
 
-    private static String[] schemas(Properties properties) {
+    static void requireVerifiedIdentityTls(String url) {
+        URI uri=URI.create(url.substring(5));
+        int count=0;
+        String query=uri.getRawQuery();
+        if(query!=null) for(String entry:query.split("&",-1)) {
+            String[] pair=entry.split("=",2);
+            if(!pair[0].matches("[A-Za-z][A-Za-z0-9]*"))throw new IllegalArgumentException("Encoded or invalid JDBC property name");
+            if(pair[0].equalsIgnoreCase("sslMode")) {
+                count++;
+                if(pair.length!=2 || !pair[1].equalsIgnoreCase("VERIFY_IDENTITY"))
+                    throw new IllegalArgumentException("Single database requires verified-identity TLS");
+            }
+            if(Set.of("useSSL","requireSSL","verifyServerCertificate").stream().anyMatch(key->key.equalsIgnoreCase(pair[0])))
+                throw new IllegalArgumentException("Do not mix legacy TLS flags with sslMode");
+        }
+        if(count!=1) throw new IllegalArgumentException("Single database requires exactly one verified-identity TLS mode");
+    }
+
+    static String[] schemas(Properties properties) {
         String[] result = new String[2]; int port = -1;
         for (int i = 0; i < 2; i++) {
             String url = required(properties, "node" + (i + 1) + ".url");
             if (!url.startsWith("jdbc:mysql://")) throw new IllegalArgumentException("Atomic mode requires loopback MySQL");
+            if (singleDatabase(properties)) requireVerifiedIdentityTls(url);
             URI endpoint = URI.create(url.substring(5)); String path = endpoint.getRawPath();
             if (!"127.0.0.1".equals(endpoint.getHost()) || endpoint.getPort() < 1 || endpoint.getPort() > 65535
                     || endpoint.getUserInfo() != null || endpoint.getFragment() != null
@@ -197,7 +250,51 @@ final class AtomicFinanceTransactions {
                 return annotate(result, durability);
             } catch (Exception | Error failure) {
                 try { physical.rollback(); } catch (SQLException rollback) { failure.addSuppressed(rollback); }
+                if(pool!=null)pool.discard(physical);
                 throw failure;
+            }
+        }
+    }
+
+    /** Dedicated opt-in page read: no guard update, no mutation/status reuse. */
+    JSONObject pageSnapshot(Model.User user,int ingress,FinanceCluster.Work work)throws Exception {
+        Model.User frozenIdentity=new Model.User();frozenIdentity.setId(user.getId());frozenIdentity.setGeneration(user.getGeneration());
+        Proof proof=authority.capture();JSONObject frozen;String durability;
+        try(Connection physical=connections.open(proof)) {
+          try {
+            physical.setReadOnly(true);physical.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);physical.setAutoCommit(false);
+            if(physical.getTransactionIsolation()!=Connection.TRANSACTION_REPEATABLE_READ)throw new SQLException("RR snapshot isolation refused");
+            if(physical.getMetaData().getDatabaseProductName().contains("MySQL"))try(Statement q=physical.createStatement();ResultSet mode=q.executeQuery("SELECT @@session.transaction_read_only,@@session.transaction_isolation")){
+                if(!mode.next()||mode.getInt(1)!=1||!"REPEATABLE-READ".equalsIgnoreCase(mode.getString(2)))throw new SQLException("Database did not enter readonly RR mode");
+            }
+            physical.setCatalog(canonicalSchema);verifyMarker(physical);
+            try(SnapshotSchemaSession session=new SnapshotSchemaSession(physical,canonicalSchema,peerSchema);
+                ShardScope scope=ShardScope.begin(session.connections(),ingress);
+                RequestIdentity.AtomicValidation identity=RequestIdentity.verifyPageSnapshot(frozenIdentity)) {
+                long revision=FinanceDataRevision.read(session.connections().get(1));
+                frozen=new JSONObject(work.run().toString()).put("dataRevision",FinanceDataRevision.token(migration,revision))
+                    .put("userGeneration",frozenIdentity.getGeneration());
+                if(!frozen.has("status"))frozen.put("status","success");
+                if(scope.isRollbackOnly()||session.rollbackOnly())throw new SQLException("Snapshot read was rolled back");
+            }
+            authority.verify(proof);physical.commit();
+            // End the snapshot, then confirm the required GTIDs with the original fresh grant.
+            durability=authority.confirm(physical,proof,UUID.randomUUID().toString());
+            physical.rollback();
+            physical.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+            verifyCurrentPageUser(physical,frozenIdentity);authority.verify(proof);physical.rollback();
+          } catch(Exception|Error failure) {if(pool!=null)pool.discard(physical);throw failure;}
+        }
+        // Resource closing (and final identity/epoch verification) precedes returning any bytes.
+        return annotate(frozen,durability);
+    }
+    private void verifyCurrentPageUser(Connection physical,Model.User user)throws SQLException {
+        for(String schema:List.of(canonicalSchema,peerSchema)){
+            physical.setCatalog(schema);
+            try(PreparedStatement q=physical.prepareStatement("SELECT GENERATION FROM USERS WHERE ID=?")){
+                q.setInt(1,user.getId());try(ResultSet rows=q.executeQuery()){
+                    if(!rows.next()||!user.getGeneration().equalsIgnoreCase(rows.getString(1))||rows.next())throw new RequestIdentity.StaleIdentity(true);
+                }
             }
         }
     }
@@ -219,9 +316,9 @@ final class AtomicFinanceTransactions {
     JSONObject run(String operation, String owner, String hash, String path, int ingress,
                    Model.User user, boolean mutation, FinanceCluster.Work work,String expectedRevision,String deletionCookie) throws Exception {
         return transact(operation, ingress, views -> {
+          try(RequestIdentity.AtomicValidation identity=RequestIdentity.verifyAtomicContext(user,mutation)) {
             Connection canonical = views.get(1);
-            for(Connection database:views.values())verifyUser(database,user);
-            if(user!=null&&RequestIdentity.isActive())RequestIdentity.verifyCurrentUser();
+            if(!identity.handled)for(Connection database:views.values())verifyUser(database,user);
             if (mutation) {
                 JSONObject previous = existing(canonical, operation, owner, hash);
                 if (previous != null) return previous;
@@ -247,6 +344,7 @@ final class AtomicFinanceTransactions {
                 update(canonical, "DELETE FROM CLUSTER_RESULTS WHERE OPERATION_ID IN (SELECT ID FROM CLUSTER_OPERATIONS WHERE OWNER_KEY=?)", owner);
             if (mutation) update(canonical, "INSERT INTO CLUSTER_RESULTS(OPERATION_ID,PAYLOAD) VALUES(?,?)", operation, result.toString());
             return result;
+          }
         });
     }
 
@@ -298,6 +396,7 @@ final class AtomicFinanceTransactions {
     void recoveryProbe() throws Exception {
         Proof proof=authority.capture();
         try(Connection physical=connections.open(proof)){
+          try {
             physical.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);physical.setAutoCommit(false);
             try(AtomicSchemaSession session=new AtomicSchemaSession(physical,canonicalSchema,peerSchema)){
                 Connection canonical=session.connections().get(1);
@@ -310,21 +409,31 @@ final class AtomicFinanceTransactions {
                     try(Statement query=database.createStatement();ResultSet rows=query.executeQuery("SELECT OPERATION_ID FROM CLUSTER_GATE WHERE ID=1")){
                         if(!rows.next()||rows.getString(1)!=null||rows.next())throw new SQLException("Atomic recovery legacy gate is not drained");
                     }
-                    for(String sql:new String[]{"SELECT ID,GENERATION,EMAIL_ADDRESS,PASSWORD FROM USERS WHERE 1=0",
-                            "SELECT ID,USER_ID,GENERATION FROM BASIC_VARIABLES_AND_DATA WHERE 1=0",
-                            "SELECT ID,USER_ID,GENERATION FROM ALL_INVESTMENT_ASSETS WHERE 1=0",
-                            "SELECT ID,USER_ID,GENERATION FROM ALL_NON_INVESTMENT_ASSETS WHERE 1=0",
-                            "SELECT ID,USER_ID,JOURNAL_ID FROM INCOME_AND_EXPENDITURE_DATA WHERE 1=0",
-                            "SELECT ID,USER_ID FROM LEDGER_JOURNALS WHERE 1=0",
-                            "SELECT JOURNAL_ID FROM LEDGER_ENTRIES WHERE 1=0"})
-                        try(Statement query=database.createStatement()){query.executeQuery(sql).close();}
+                    // Resolve every same table, column and SELECT privilege in one
+                    // no-row query rather than seven serial remote round trips.
+                    String access="SELECT A.*,B.*,C.*,D.*,E.*,F.*,G.* FROM "
+                            +"(SELECT ID,GENERATION,EMAIL_ADDRESS,PASSWORD FROM USERS WHERE 1=0) A CROSS JOIN "
+                            +"(SELECT ID,USER_ID,GENERATION FROM BASIC_VARIABLES_AND_DATA WHERE 1=0) B CROSS JOIN "
+                            +"(SELECT ID,USER_ID,GENERATION FROM ALL_INVESTMENT_ASSETS WHERE 1=0) C CROSS JOIN "
+                            +"(SELECT ID,USER_ID,GENERATION FROM ALL_NON_INVESTMENT_ASSETS WHERE 1=0) D CROSS JOIN "
+                            +"(SELECT ID,USER_ID,JOURNAL_ID FROM INCOME_AND_EXPENDITURE_DATA WHERE 1=0) E CROSS JOIN "
+                            +"(SELECT ID,USER_ID FROM LEDGER_JOURNALS WHERE 1=0) F CROSS JOIN "
+                            +"(SELECT JOURNAL_ID FROM LEDGER_ENTRIES WHERE 1=0) G";
+                    try(Statement query=database.createStatement()){query.executeQuery(access).close();}
                 }
                 authority.verify(proof);
             }finally{physical.rollback();}
+          }catch(Exception|Error failure){if(pool!=null)pool.discard(physical);throw failure;}
         }
     }
 
-    String durabilityMode() throws SQLException { return authority.capture().mode(); }
+    String durabilityMode() throws SQLException {
+        Proof proof=authority.capture();
+        if (singleDatabase(config)) try { recoveryProbe(); }
+        catch (SQLException failure) { throw failure; }
+        catch (Exception failure) { throw new SQLException("Single database readiness is unavailable",failure); }
+        return proof.mode();
+    }
 
     FinanceCluster.LoginOutcome login(String operation,String client,String emailHash,String payloadHash,String email,String password)throws Exception{
         AtomicLoginAttempts.Outcome[] outcome=new AtomicLoginAttempts.Outcome[1];

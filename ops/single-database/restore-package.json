@@ -1,0 +1,14 @@
+{
+  "files": {
+    "atomic_attestation.py": "a655104a9c2e0e87ebf6fcf1c662170c122e704328218b6aedb29dd08822d872",
+    "isolated_data_digest.py": "49fb3644d020f8951103211c48e67dd26328f9659b852d0064b6ec907182b500",
+    "isolated_restore_worker.py": "6d57d5ec21097d2592b6b67fa9611d9b94ef988ae0d022a69abd4dbcf72fe27c",
+    "recovery_envelope.cjs": "5e22f75a7dab7b366ad34a8bab9e52ea19e27da49c9f05952b0e1aae0c315f7d",
+    "restore_inventory.py": "3aaad72098c334b2e9bba59baee8a41f1254ef11e97c5db7695dbc9650bcf7af",
+    "schema_fingerprint.py": "5791644716552b00ea582186e4b0fb6107fc31e93634c4a2251954748b2e5c21",
+    "single_database_restore.py": "f8d5bad57e00bde1f97340b878c0308b7b7cda7be8ab80f2f1551099deb8a87f",
+    "sql_import_validator.py": "75b93f5e1bf4122cf7106d0dc0a45e24d1dc3f081409759a7aca0596c6bf96eb"
+  },
+  "format": "single-database-isolated-restore-package-v1",
+  "scope": "candidate; independent review required before execute"
+}

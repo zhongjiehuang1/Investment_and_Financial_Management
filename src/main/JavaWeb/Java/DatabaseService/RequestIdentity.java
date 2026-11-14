@@ -30,6 +30,7 @@ public final class RequestIdentity extends DatabaseInit implements AutoCloseable
     private final boolean mutation;
     private final List<Record> records;
     private final List<Account> accounts;
+    private ShardScope verifiedAtomicReadScope;
 
     private RequestIdentity(User user, boolean mutation, List<Record> records, List<Account> accounts) {
         if (user == null || user.getId() <= 0 || !validGeneration(user.getGeneration())) throw new StaleIdentity(true);
@@ -59,10 +60,49 @@ public final class RequestIdentity extends DatabaseInit implements AutoCloseable
         return identity != null && !identity.mutation;
     }
 
+    /** Only user row locks held by this exact atomic read transaction are reused. */
+    static final class AtomicValidation implements AutoCloseable {
+        private final RequestIdentity identity;
+        private final ShardScope previous;
+        final boolean handled;
+        AtomicValidation(RequestIdentity identity,ShardScope previous,boolean handled){this.identity=identity;this.previous=previous;this.handled=handled;}
+        @Override public void close(){if(identity!=null)identity.verifiedAtomicReadScope=previous;}
+    }
+    static AtomicValidation verifyAtomicContext(User user,boolean mutation)throws SQLException {
+        RequestIdentity identity=CURRENT.get();
+        if(identity==null)return new AtomicValidation(null,null,false);
+        if(user==null||identity.userId!=user.getId()||!identity.userGeneration.equalsIgnoreCase(user.getGeneration())||identity.mutation!=mutation||!ShardScope.isActive())
+            throw new SQLException("Atomic request identity context mismatch");
+        // This still performs the two live identity checks, including owned
+        // record/account validation for mutations, before any cache is enabled.
+        verifyCurrentUser();
+        ShardScope previous=identity.verifiedAtomicReadScope;
+        if(!mutation&&identity.records.isEmpty()&&identity.accounts.isEmpty())identity.verifiedAtomicReadScope=ShardScope.current();
+        return new AtomicValidation(identity,previous,true);
+    }
+
+    /** Explicit page-snapshot context only; old atomic/mutation validation is unchanged. */
+    static AtomicValidation verifyPageSnapshot(User user)throws SQLException {
+        RequestIdentity identity=CURRENT.get();
+        if(identity==null||user==null||identity.mutation||!identity.records.isEmpty()||!identity.accounts.isEmpty()
+            ||identity.userId!=user.getId()||!identity.userGeneration.equalsIgnoreCase(user.getGeneration())||!ShardScope.isActive())
+            throw new SQLException("Explicit authenticated page snapshot context required");
+        for(Connection participant:ShardScope.connections(ShardScope.current().connection(1))) {
+            try(PreparedStatement q=participant.prepareStatement("SELECT GENERATION FROM USERS WHERE ID=?")){
+                q.setInt(1,identity.userId);try(ResultSet rows=q.executeQuery()){
+                    if(!rows.next()||!identity.userGeneration.equalsIgnoreCase(rows.getString(1))||rows.next())throw new StaleIdentity(true);
+                }
+            }
+        }
+        ShardScope previous=identity.verifiedAtomicReadScope;identity.verifiedAtomicReadScope=ShardScope.current();
+        return new AtomicValidation(identity,previous,true);
+    }
+
     /** Every protected connection pins the user until commit, including read-only API connections. */
     public static void validateUser(Connection connection) throws SQLException {
         RequestIdentity identity = CURRENT.get();
         if (identity == null) return;
+        if(!identity.mutation&&ShardScope.isActive()&&identity.verifiedAtomicReadScope==ShardScope.current())return;
         for (Connection participant : ShardScope.connections(connection)) {
             try (PreparedStatement statement = participant.prepareStatement("SELECT GENERATION FROM USERS WHERE ID = ? "
                     + (ShardScope.isActive() || identity.mutation || !participant.getMetaData().getDatabaseProductName().contains("MySQL") ? "FOR UPDATE" : "LOCK IN SHARE MODE"))) {
@@ -158,7 +198,7 @@ public final class RequestIdentity extends DatabaseInit implements AutoCloseable
         }
     }
 
-    @Override public void close() { CURRENT.remove(); }
+    @Override public void close() { verifiedAtomicReadScope=null;CURRENT.remove(); }
 
     public static final class StaleIdentity extends RuntimeException {
         private final boolean user;

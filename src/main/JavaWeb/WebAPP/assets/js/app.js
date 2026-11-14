@@ -908,6 +908,9 @@
             if (response.redirected && (response.url.includes('?message=') || response.url.endsWith(API_BASE + '/') || response.url.endsWith(API_BASE))) throw Object.assign(new Error(t('sessionExpired')), {sessionExpired: true});
             const data = contentType.includes('json') ? await response.json() : null;
             if (sessionVersion !== state.sessionVersion) throw Object.assign(new Error(t('sessionExpired')), {staleRequest: true});
+            if (response.status === 429 && data?.code === 'SERVER_BUSY' && data.dispatchState === 'NOT_STARTED')
+                throw Object.assign(new Error(state.lang === 'zh' ? '服务器繁忙，本次请求尚未开始。请稍候查询或使用原操作编号重试。' : 'Server busy; this request was not started. Wait, then check or retry with the original operation ID.'),
+                    {serverBusy: true, dispatchState: 'NOT_STARTED', httpStatus: 429, retryAfterSeconds: data.retryAfterSeconds || 1});
             if (options.authOutcome && [200, 401, 409, 429].includes(response.status)) {
                 if (!data) throw new Error(t('networkError'));
                 return {httpStatus: response.status, body: data};
@@ -1050,7 +1053,7 @@
       </section>
       <section class="auth-panel">
         <div class="auth-tools">
-          <button class="icon-btn language-switch" id="authLang" aria-label="${languageSwitchAria()}">${icon('globe')}<span>${languageSwitchLabel()}</span></button>
+          <button type="button" class="language-switch" id="authLang" aria-label="${languageSwitchAria()}">${languageSwitchLabel()}</button>
           <button class="icon-btn" id="authTheme" aria-label="${t('theme')}">${icon(state.theme === 'dark' ? 'sun' : 'moon')}</button>
         </div>
         <div class="auth-form-wrap">
@@ -1108,7 +1111,7 @@
           <div class="topbar-actions">
             <button class="icon-btn desktop-only ${state.privacy ? 'privacy-active' : ''}" id="privacyToggle" aria-label="${state.privacy ? t('showBalances') : t('hideBalances')}">${icon(state.privacy ? 'eyeOff' : 'eye')}</button>
             <button class="icon-btn desktop-only" id="themeToggle" aria-label="${t('theme')}">${icon(state.theme === 'dark' ? 'sun' : 'moon')}</button>
-            <button class="icon-btn language-switch" id="languageToggle" aria-label="${languageSwitchAria()}">${icon('globe')}<span>${languageSwitchLabel()}</span></button>
+            <button type="button" class="language-switch" id="languageToggle" aria-label="${languageSwitchAria()}">${languageSwitchLabel()}</button>
             <button class="icon-btn" id="notificationToggle" aria-label="${t('notifications')}">${icon('bell')}<span class="badge-count">${notificationCount()}</span></button>
             <button class="user-chip" id="userMenu"><span class="user-avatar">${esc(initials(state.user.name))}</span><span class="user-meta"><strong>${esc(state.user.name || t('account'))}</strong><span data-sensitive="true">${esc(state.user.account)}</span></span>${icon('chevron')}</button>
           </div>
@@ -1339,7 +1342,12 @@
     }
 
     async function bootstrapData(force = false) {
-        await Promise.all([loadReport(force), loadRecentTransactions(force)]);
+        if (!force && state.report && state.recentTransactions && samePageSnapshot(state.report, state.recentTransactions)) return;
+        const bundle = await readData('/pageData', {json: {view: 'overview'}});
+        const report = pagePart(bundle, 'report'), recent = pagePart(bundle, 'recent');
+        if (!Array.isArray(recent.items)) throw new Error(t('networkError'));
+        state.report = report;
+        state.recentTransactions = recent.items;
     }
 
     async function renderPage() {
@@ -1349,8 +1357,8 @@
         const page = state.page;
         const routes = {
             overview: [() => bootstrapData(), renderOverview, bindOverview],
-            assets: [() => Promise.all([loadAssets(), loadReport()]), renderAssets, bindAssets],
-            transactions: [() => Promise.all([loadTransactions(), loadCashflowSummary(), loadPlatforms()]), renderTransactions, bindTransactions],
+            assets: [() => loadAssetsPage(), renderAssets, bindAssets],
+            transactions: [() => loadTransactionsPage(), renderTransactions, bindTransactions],
             reports: [() => loadReport(), renderReports, bindReports],
             inflation: [() => loadInflation(), renderInflation, bindInflation],
             goals: [() => Promise.resolve(), renderGoals, bindGoals],
@@ -1373,21 +1381,35 @@
         }
     }
 
-    async function loadAssets(force = false) {
+    function samePageSnapshot(...parts) {
+        try { snapshots.same(parts[0], ...parts.slice(1).map(part => snapshots.get(part))); return true; }
+        catch (_) { return false; }
+    }
+
+    function pagePart(bundle, key) {
+        const value = bundle[key];
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('networkError'));
+        // readData stamps every nested value. Keep that exact provenance when
+        // constructing display/cache objects; never adopt a later page token.
+        return snapshots.derive(value, {dataRevision: snapshots.get(bundle), userGeneration: bundle.userGeneration});
+    }
+
+    async function loadAssetsPage(force = false) {
         const form = {kind: state.assetTab, page: state.assetPage, pageSize: PAGE_SIZE, q: state.assetSearch, risk: state.riskFilter};
         const cacheKey = JSON.stringify(form);
-        if (state.assets?.cacheKey === cacheKey && !force) return state.assets;
-        const data = await readData('/viewAllCurrentAssets', {form});
+        if (!force && state.assets?.cacheKey === cacheKey && state.report && samePageSnapshot(state.assets, state.report)) return;
+        const bundle = await readData('/pageData', {json: {view: 'assets', assets: form}});
+        const data = pagePart(bundle, 'assets'), report = pagePart(bundle, 'report');
         if (!Array.isArray(data.items)) throw new Error(t('networkError'));
-        state.assets = {
-            ...data, cacheKey,
+        state.assets = snapshots.derive(data, {
+            cacheKey,
             investments: form.kind === 'investment' ? data.items : [],
             nonInvestments: form.kind === 'nonInvestment' ? data.items : [],
             assetTypes: data.assetTypes || DEFAULTS.assetTypes,
             riskTypes: data.riskTypes || DEFAULTS.riskTypes,
             currencies: data.currencies || DEFAULTS.currencies
-        };
-        return state.assets;
+        });
+        state.report = report;
     }
 
     function transactionFilters() {
@@ -1399,44 +1421,25 @@
         };
     }
 
-    async function loadTransactions(force = false) {
+    async function loadTransactionsPage(force = false) {
         const filter = {...transactionFilters(), page: state.txPage, pageSize: PAGE_SIZE, sortBy: state.txSort.by, sortDirection: state.txSort.direction};
         const cacheKey = JSON.stringify(filter);
-        if (state.transactions?.cacheKey === cacheKey && !force) return state.transactions;
-        const data = await readData('/getIncomeAndExpenditureData', {json: filter});
+        const summaryFilter = transactionFilters(), summaryKey = JSON.stringify(summaryFilter);
+        if (!force && state.transactions?.cacheKey === cacheKey && state.cashflowSummary?.cacheKey === summaryKey && state.platforms
+                && samePageSnapshot(state.transactions, state.cashflowSummary, state.platforms)) return;
+        const bundle = await readData('/pageData', {json: {view: 'transactions', transactions: filter, cashflow: summaryFilter}});
+        const data = pagePart(bundle, 'transactions'), cashflow = pagePart(bundle, 'cashflow'), platforms = pagePart(bundle, 'platforms');
         if (!Array.isArray(data.items)) throw new Error(t('networkError'));
-        state.transactions = {...data, cacheKey};
-        return state.transactions;
-    }
-
-    async function loadRecentTransactions(force = false) {
-        if (state.recentTransactions && !force) return state.recentTransactions;
-        const data = await readData('/getIncomeAndExpenditureData', {json: {page: 1, pageSize: 5}});
-        if (!Array.isArray(data.items)) throw new Error(t('networkError'));
-        state.recentTransactions = data.items;
-        return state.recentTransactions;
-    }
-
-    async function loadCashflowSummary(force = false) {
-        const filter = transactionFilters();
-        const cacheKey = JSON.stringify(filter);
-        if (state.cashflowSummary?.cacheKey === cacheKey && !force) return state.cashflowSummary;
-        const data = await readData('/getCashflowSummary', {json: filter});
-        state.cashflowSummary = {...data, cacheKey};
-        return state.cashflowSummary;
+        if (!Array.isArray(platforms.items)) throw new Error(t('networkError'));
+        state.transactions = snapshots.derive(data, {cacheKey});
+        state.cashflowSummary = snapshots.derive(cashflow, {cacheKey: summaryKey});
+        state.platforms = platforms;
     }
 
     async function loadReport(force = false) {
         if (state.report && !force) return state.report;
         state.report = await readData('/generatingFinancialReport', {json: {}});
         return state.report;
-    }
-
-    async function loadPlatforms(force = false) {
-        if (state.platforms && !force) return state.platforms;
-        const data = await readData('/getPlatforms', {json: {page: 1, pageSize: PAGE_SIZE}});
-        state.platforms = data;
-        return data;
     }
 
     async function loadInflation(force = false) {
@@ -1548,13 +1551,23 @@
         return notes;
     }
 
+    function renderExchangeReference(report) {
+        const fx = report?.exchangeReference;
+        if (!fx || !['ecb', 'exchangerate-api', 'manual'].includes(fx.source)) return '';
+        const zh = state.lang === 'zh';
+        const source = fx.source === 'ecb' ? (zh ? '欧洲中央银行（ECB）' : 'European Central Bank (ECB)') : fx.source === 'manual' ? (zh ? '手动配置参考值' : 'Manually configured reference') : 'ExchangeRate-API';
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(fx.asOf || '') ? fx.asOf : (zh ? '未提供参考日期' : 'Reference date not supplied');
+        const note = zh ? '每日参考值，并非实时交易报价' : 'Daily reference values, not live trading quotes';
+        return `<p class="card-subtitle">${esc(source)} · ${esc(date)} · ${note}${fx.stale ? (zh ? ' · 较早参考日期' : ' · Earlier reference date') : ''}</p>`;
+    }
+
     function renderOverview() {
         const s = overviewStats();
         const goals = getGoals();
         const tx = state.recentTransactions || [];
         const notes = buildInsights();
         return `<div>
-      <section class="hero-card"><div class="eyebrow">${greeting()}, ${esc((state.user.name || '').split(' ')[0] || t('account'))}</div><h2>${t('financialOverview')}</h2><p>${t('reportDesc')}</p><div class="hero-meta"><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${s.assetCount}</strong></div><div class="hero-stat"><small>${t('selectedCurrency')}</small><strong>${esc(s.currency)}</strong></div><div class="hero-stat"><small>${t('refreshed')}</small><strong>${new Intl.DateTimeFormat(state.lang === 'zh' ? 'zh-CN' : 'en-GB', {
+      <section class="hero-card"><div class="eyebrow">${greeting()}, ${esc((state.user.name || '').split(' ')[0] || t('account'))}</div><h2>${t('financialOverview')}</h2><p>${t('reportDesc')}</p>${renderExchangeReference(state.report)}<div class="hero-meta"><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${s.assetCount}</strong></div><div class="hero-stat"><small>${t('selectedCurrency')}</small><strong>${esc(s.currency)}</strong></div><div class="hero-stat"><small>${t('refreshed')}</small><strong>${new Intl.DateTimeFormat(state.lang === 'zh' ? 'zh-CN' : 'en-GB', {
             hour: '2-digit',
             minute: '2-digit'
         }).format(new Date())}</strong></div></div></section>
@@ -1997,7 +2010,7 @@
         const currencies = Array.from(new Set([...(report.currencies || DEFAULTS.currencies), ...exposure.map(row => row.currency)]));
         return `<div>
           <div class="page-actions"><div class="page-actions-left"><label class="sr-only" for="reportCurrency">${t('baseCurrency')}</label><select class="select filter-select" id="reportCurrency">${currencies.map(code => `<option value="${attr(code)}" ${code === currency ? 'selected' : ''}>${esc(code)}</option>`).join('')}</select></div><div class="page-actions-right"><button class="btn btn-secondary" id="refreshReport">${icon('refresh')}${t('refresh')}</button><button class="btn btn-secondary" id="exportReport">${icon('download')}${t('export')}</button><button class="btn btn-primary" id="printReport">${icon('print')}${t('print')}</button></div></div>
-          <section class="hero-card"><div class="eyebrow">${t('financialReport')}</div><h2>${t('totalNetWorth')}: <span class="money" data-sensitive="true">${money(report.netWorth, currency)}</span></h2><p>${t('reportDesc')}</p><div class="hero-meta"><div class="hero-stat"><small>${t('baseCurrency')}</small><strong>${esc(currency)}</strong></div><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${stats.assetCount}</strong></div><div class="hero-stat"><small>${t('records')}</small><strong>${num(report.recordCount)}</strong></div></div></section>
+          <section class="hero-card"><div class="eyebrow">${t('financialReport')}</div><h2>${t('totalNetWorth')}: <span class="money" data-sensitive="true">${money(report.netWorth, currency)}</span></h2><p>${t('reportDesc')}</p>${renderExchangeReference(report)}<div class="hero-meta"><div class="hero-stat"><small>${t('baseCurrency')}</small><strong>${esc(currency)}</strong></div><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${stats.assetCount}</strong></div><div class="hero-stat"><small>${t('records')}</small><strong>${num(report.recordCount)}</strong></div></div></section>
           <div class="report-grid" style="margin-top:18px">
             <article class="card card-pad"><div class="card-head"><div><h3 class="card-title">${t('financialOverview')}</h3><div class="card-subtitle">${t('selectedCurrency')}: ${esc(currency)}</div></div></div><div class="metric-list">${metric(t('actualEarnings'), money(report.earnings, currency), isNegativeMoney(report.earnings) ? 'amount-negative' : 'amount-positive')}${metric(t('fees'), money(report.fees, currency))}${metric(t('priorEarnings'), money(report.priorEarnings, currency))}${metric(t('cycleEarnings'), money(report.cycleEarnings, currency))}</div></article>
             <article class="card card-pad"><div class="card-head"><div><h3 class="card-title">${t('riskAllocation')}</h3><div class="card-subtitle">${t('riskDesc')}</div></div></div>${renderDonut(stats)}</article>
@@ -2321,7 +2334,7 @@
     }
 
     function renderAppearanceSettings() {
-        return `<div class="setting-row"><div class="setting-copy"><strong>${t('theme')}</strong><p>${t('appearance')}</p></div><div class="segmented"><button class="${state.theme === 'dark' ? 'active' : ''}" data-theme-choice="dark">${icon('moon')}${t('dark')}</button><button class="${state.theme === 'light' ? 'active' : ''}" data-theme-choice="light">${icon('sun')}${t('light')}</button></div></div><div class="setting-row"><div class="setting-copy"><strong>${t('language')}</strong><p>${t('bilingual')}</p></div><div class="segmented"><button class="${state.lang === 'en' ? 'active' : ''}" data-lang-choice="en">English</button><button class="${state.lang === 'zh' ? 'active' : ''}" data-lang-choice="zh">中文</button></div></div><div class="setting-row"><div class="setting-copy"><strong>${t('reducedMotion')}</strong><p>${t('reducedMotionDesc')}</p></div><span class="chip good">${icon('check')} OS</span></div>`;
+        return `<div class="setting-row"><div class="setting-copy"><strong>${t('theme')}</strong><p>${t('appearance')}</p></div><div class="segmented"><button class="${state.theme === 'dark' ? 'active' : ''}" data-theme-choice="dark">${icon('moon')}${t('dark')}</button><button class="${state.theme === 'light' ? 'active' : ''}" data-theme-choice="light">${icon('sun')}${t('light')}</button></div></div><div class="setting-row"><div class="setting-copy"><strong>${t('language')}</strong><p>${t('bilingual')}</p></div><button type="button" class="language-switch" data-lang-choice="${state.lang === 'en' ? 'zh' : 'en'}" aria-label="${languageSwitchAria()}">${languageSwitchLabel()}</button></div><div class="setting-row"><div class="setting-copy"><strong>${t('reducedMotion')}</strong><p>${t('reducedMotionDesc')}</p></div><span class="chip good">${icon('check')} OS</span></div>`;
     }
 
     function renderDataSettings() {

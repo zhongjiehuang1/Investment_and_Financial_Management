@@ -9,7 +9,6 @@
     let lang = document.documentElement.lang;
     let serverId = null;
     let unavailable = false;
-    let degraded = false;
     let failureEpoch = 0;
     let identityPending = false;
     let healthPending = false;
@@ -25,8 +24,8 @@
         badge.classList.toggle('confirmed', serverId !== null);
         banner.textContent = unavailable
             ? (chinese ? '服务器故障，请等待恢复' : 'Server unavailable. Please wait for recovery.')
-            : (chinese ? '单副本降级运行：新操作暂时只有一份数据副本。' : 'Single-copy degraded mode. New changes currently have one data copy.');
-        banner.hidden = !unavailable && !degraded;
+            : '';
+        banner.hidden = !unavailable;
         resize();
     }
     function reportUnavailable() {
@@ -56,7 +55,7 @@
         render();
         try {
             const info = await request('/api/server');
-            if (info && Number.isSafeInteger(info.serverId) && info.serverId >= 1) serverId = info.serverId;
+            if (info && (info.serverId === 1 || info.serverId === 2)) serverId = info.serverId;
         } catch (_) { /* Never infer an identity or display diagnostic details. */ }
         finally { identityPending = false; render(); }
     }
@@ -70,7 +69,6 @@
             // A response started before a later failed operation cannot clear it.
             if (observedEpoch === failureEpoch) {
                 unavailable = false;
-                degraded = info.replicationMode === 'single' && info.degraded === true;
                 render();
             }
         } catch (_) { reportUnavailable(); }

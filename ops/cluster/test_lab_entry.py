@@ -248,7 +248,12 @@ class EntryTest(unittest.TestCase):
         self.assertEqual(route('n1'),'four_starhub_n1');self.assertEqual(route('n2'),'four_starhub_n2')
         for raw in ('','N1','n3',' n1','n1 ','n1, n2','n1\n','http://127.0.0.1:881','four_starhub_n1'):
             self.assertEqual(route(raw),'$four_starhub_cookie_upstream')
-        self.assertNotIn('proxy_set_header Cookie',text);self.assertNotIn('Set-Cookie',text)
+        # Authenticated application session cookies still pass byte-for-byte.
+        # Only the separate immutable public Portfolio asset route omits them.
+        for app in ('iafm','starhub','ucost'):
+            server=text.split('server_name '+app+'.example.invalid;',1)[1].split('    server {',1)[0]
+            self.assertNotIn('proxy_set_header Cookie',server)
+        self.assertNotIn('Set-Cookie',text)
         for app in ('iafm','ucost','portfolio'):
             target='$cookie_UCOST_SESSION' if app=='ucost' else '$cookie_JSESSIONID'
             self.assertIn('map '+target+' $four_'+app+'_upstream {',text)
@@ -291,6 +296,30 @@ class EntryTest(unittest.TestCase):
             bad=config();bad['nodes']['2'][field]=url
             with self.assertRaises(entry.Closed):entry.validate(bad)
 
+    def test_single_database_removes_retired_controller_requirements_only(self):
+        value=config();value['databaseTopology']='single-database'
+        value['singleDatabase']={'mysqlUuid':mysql_uuid(2),'monitorUrl':'http://127.0.0.1:942','monitorToken':TOKEN}
+        for node in value['nodes'].values():
+            for key in ('controller','appToken','readyToken'):node.pop(key)
+        entry.validate(value)
+        text=entry.render(value,{app:[1,2] for app in entry.APPS})
+        self.assertIn('127.0.0.1:881',text);self.assertIn('127.0.0.1:882',text)
+        for node in ('1','2'):
+            bad=copy.deepcopy(value);bad['nodes'][node]['tomcat']='http://127.0.0.1:9999'
+            with self.assertRaises(entry.Closed):entry.validate(bad)
+        for key in ('monitorToken','monitorUrl','mysqlUuid'):
+            bad=copy.deepcopy(value);bad['singleDatabase'].pop(key)
+            with self.assertRaises((entry.Closed,KeyError)):entry.validate(bad)
+        for app in ('iafm','starhub','ucost'):
+            bad=copy.deepcopy(value);bad['applications'][app].pop('recoveryToken')
+            with self.assertRaises(entry.Closed):entry.validate(bad)
+        for app in ('iafm','starhub'):
+            bad=copy.deepcopy(value);bad['applications'][app].pop('ingressToken')
+            with self.assertRaises(entry.Closed):entry.validate(bad)
+        bad=copy.deepcopy(value);bad['nodes']['1']['controller']='http://127.0.0.1:9999'
+        with self.assertRaises(entry.Closed):entry.validate(bad)
+        legacy=config();legacy['nodes']['1'].pop('controller')
+        with self.assertRaises((entry.Closed,KeyError)):entry.validate(legacy)
     def test_missing_or_changed_controller_boot_identity_closes_real_probe(self):
         fixture=HttpFixture()
         try:
@@ -524,6 +553,136 @@ class EntryTest(unittest.TestCase):
             self.assertIn('recursive_error_pages off;',block)
             self.assertIn('return 503 ',block)
 
+    def test_iafm_shell_publication_routes_cover_query_and_context_without_assets(self):
+        import re
+        from urllib.parse import urlsplit
+        text=entry.render(config(),{app:[1,2] for app in entry.APPS})
+        iafm=text.split('server_name iafm.example.invalid;',1)[1].split('    server {',1)[0]
+        pattern=re.search(r'location ~ (\^/[^\n]+) \{\n            recursive_error_pages on;',iafm).group(1)
+        match=lambda url:re.fullmatch(pattern,urlsplit(url).path)
+        for prefix in ('/','/Investment_and_Financial_Management/'):
+            for path in ('','index.html','privacy-policy.html','exchange-rates.html','sw.js'):
+                for query in ('','?v=published-new-content','?x=1&v=2'):
+                    self.assertIsNotNone(match(prefix+path+query),prefix+path+query)
+        for path in ('/assets/js/app.js?v=eb466854833d6d26','/assets/css/app.css?v=hash',
+                     '/manifest.webmanifest','/api/server','/generatingFinancialReport',
+                     '/getExchangeRates','/unrelated.html','/nested/index.html','/starhub/sw.js',
+                     '/index.html/extra','/prefixsw.js','/WEB-INF/index.html'):
+            self.assertIsNone(match(path),path)
+
+    def test_iafm_shell_read_strips_each_conditional_validator_and_preserves_asset_policy(self):
+        for available in ([1,2],[1],[2],[]):
+            with self.subTest(available=available):
+                text=entry.render(config(),{app:available for app in entry.APPS})
+                iafm=text.split('server_name iafm.example.invalid;',1)[1].split('    server {',1)[0]
+                shell=iafm.split('        location @iafm_shell_read {',1)[1].split('\n        }',1)[0]
+                # An If-Modified-Since-only client must be handled as well as
+                # one carrying the old equal-size/equal-time weak ETag.
+                for directive in ('proxy_set_header If-None-Match "";',
+                                  'proxy_set_header If-Modified-Since "";',
+                                  'proxy_hide_header ETag;','proxy_hide_header Last-Modified;',
+                                  'proxy_hide_header Cache-Control;','proxy_hide_header Expires;',
+                                  'add_header Cache-Control "no-store" always;'):
+                    self.assertIn(directive,shell)
+                    self.assertEqual(iafm.count(directive),1,directive)
+                generic=iafm.split('        location @safe_read {',1)[1].split('\n        }',1)[0]
+                for directive in ('proxy_hide_header ETag;','proxy_set_header If-None-Match "";',
+                                  'add_header Cache-Control "no-store" always;'):
+                    self.assertNotIn(directive,generic)
+                for app in ('starhub','ucost','portfolio'):
+                    server=text.split('server_name '+app+'.example.invalid;',1)[1].split('    server {',1)[0]
+                    self.assertNotIn('@iafm_shell_read',server)
+                    generic=server.split('        location @safe_read {',1)[1].split('\n        }',1)[0]
+                    self.assertNotIn('proxy_hide_header ETag;',generic)
+
+    def test_all_project_html_publication_strips_old_conditions_without_matching_business_routes(self):
+        import re
+        text=entry.render(config(),{app:[1,2] for app in entry.APPS})
+        for app in ('starhub','ucost','portfolio'):
+            server=text.split('server_name '+app+'.example.invalid;',1)[1].split('    server {',1)[0]
+            pattern=re.findall(r'location ~ "([^"\n]+)"',server)[-1]
+            good=['/','/index.html']
+            if app=='portfolio':good+=['/projects/','/zh/projects/two-server-system/','/privacy.html']
+            else:good+=['/'+entry.CONTEXT[app]+'/','/'+entry.CONTEXT[app]+'/index.html']
+            for path in good:self.assertIsNotNone(re.fullmatch(pattern,path),(app,path))
+            for path in ('/api/server','/api/workspace','/api/data','/assets/app.012345abcdef.js'):
+                self.assertIsNone(re.fullmatch(pattern,path),(app,path))
+            block=server.split('        location @'+app+'_shell_read {',1)[1].split('\n        }',1)[0]
+            for header in ('If-None-Match','If-Modified-Since'):self.assertIn('proxy_set_header '+header+' "";',block)
+            self.assertIn('add_header Cache-Control "no-store" always;',block)
+            self.assertIn('auth_request /_entry_admit;',block)
+            self.assertIn('proxy_next_upstream_tries 2;',block)
+            self.assertNotIn('non_idempotent',block)
+
+    def test_immutable_public_asset_policy_excludes_sensitive_and_unversioned_routes(self):
+        import re
+        text=entry.render(config(),{app:[1,2] for app in entry.APPS})
+        portfolio=text.split('server_name portfolio.example.invalid;',1)[1].split('    server {',1)[0]
+        pattern=re.search(r'location ~ "([^"\n]+assets[^"\n]+)"',portfolio).group(1)
+        for path in ('/assets/app.012345abcdef.js','/assets/system-explainer.abcdef123456.css'):
+            self.assertIsNotNone(re.fullmatch(pattern,path))
+        for path in ('/api/data','/api/server','/index.html','/files/private.012345abcdef.js',
+                     '/assets/app.js','/assets/.012345abcdef.js','/assets/app.012345abcdef.json',
+                     '/assets/app.012345abcdef.js/extra','/assets/app.012345abcdeg.js'):
+            self.assertIsNone(re.fullmatch(pattern,path),path)
+        block=portfolio.split('        location ~ "^/assets/',1)[1].split('\n        }',1)[0]
+        for directive in ('if ($request_method !~ ^(GET|HEAD)$) { return 405; }',
+                          'auth_request /_entry_admit;','gzip on;','gzip_vary on;',
+                          'proxy_set_header Cookie "";','proxy_set_header Authorization "";',
+                          'proxy_pass_request_body off;','proxy_next_upstream_tries 2;'):
+            self.assertIn(directive,block)
+        for app in ('iafm','starhub','ucost'):
+            server=text.split('server_name '+app+'.example.invalid;',1)[1].split('    server {',1)[0]
+            self.assertNotIn('gzip on;',server)
+            self.assertNotIn('$four_public_asset_cache',server)
+        cache=text.split('map $status $four_public_asset_cache {',1)[1].split('\n    }',1)[0]
+        self.assertIn('default "no-store";',cache)
+        self.assertEqual(cache.count('public, max-age=31536000, immutable'),2)
+        for header in ('X-Content-Type-Options','X-Frame-Options','Referrer-Policy','Strict-Transport-Security'):
+            self.assertIn('add_header '+header,block)
+
+    def test_upstream_reuse_is_bounded_and_preserves_health_groups_and_post_retry_policy(self):
+        for healthy in ([1,2],[1],[2],[]):
+            text=entry.render(config(),{app:healthy for app in entry.APPS})
+            self.assertEqual(text.count('keepalive 2;'),12)
+            self.assertEqual(text.count('keepalive_requests 32;'),12)
+            self.assertEqual(text.count('keepalive_timeout 10s;'),12)
+            for app in entry.APPS:
+                for preference in ('any','n1','n2'):
+                    block=text.split('upstream four_'+app+'_'+preference+' {',1)[1].split('\n    }',1)[0]
+                    for node in (1,2):
+                        self.assertEqual(('127.0.0.1:'+str(880+node)) in block,node in healthy)
+                    self.assertEqual('127.0.0.1:9 down' in block,not healthy)
+            self.assertNotIn('non_idempotent',text)
+            self.assertGreaterEqual(text.count('proxy_next_upstream off;'),4)
+
+    def test_iafm_shell_full_read_preserves_head_admission_safe_failover_and_security(self):
+        import re
+        text=entry.render(config(),{app:[1,2] for app in entry.APPS})
+        route=text.split('        location ~ ^/(?:Investment_and_Financial_Management/)?',1)[1].split('\n        }',1)[0]
+        shell=text.split('        location @iafm_shell_read {',1)[1].split('\n        }',1)[0]
+        methods=re.search(r'if \(\$request_method ~ (\^\(GET\|HEAD\)\$)\)',route).group(1)
+        for method in ('GET','HEAD'):self.assertIsNotNone(re.fullmatch(methods,method))
+        for method in ('POST','PUT','DELETE'):self.assertIsNone(re.fullmatch(methods,method))
+        self.assertIn('error_page 418 = @iafm_shell_read;',route)
+        self.assertIn('error_page 403 500 502 503 504 =503 @entry_unavailable;',route)
+        self.assertIn('proxy_next_upstream off;',route)
+        for block in (route,shell):
+            self.assertIn('auth_request /_entry_admit;',block)
+            self.assertIn('proxy_set_header X-IAFM-Ingress-Token',block)
+            self.assertIn('proxy_pass http://$four_iafm_upstream/Investment_and_Financial_Management$four_iafm_uri;',block)
+        self.assertIn('proxy_pass_request_body off;',shell)
+        self.assertIn('proxy_next_upstream error timeout invalid_header http_502 http_503 http_504;',shell)
+        self.assertIn('proxy_next_upstream_tries 2;',shell)
+        self.assertNotIn('non_idempotent',shell)
+        # Local Cache-Control must not suppress the server's security headers
+        # through Nginx's all-or-none add_header inheritance rule.
+        for directive in ('add_header X-Content-Type-Options nosniff always;',
+                          'add_header X-Frame-Options DENY always;',
+                          'add_header Referrer-Policy no-referrer always;',
+                          'add_header Strict-Transport-Security "max-age=31536000" always;'):
+            self.assertIn(directive,shell)
+
     def test_prefile_body_limits_are_global_per_kind_and_cover_context_aliases(self):
         import re
         text=entry.render(config(),{a:[1,2] for a in entry.APPS})
@@ -534,12 +693,30 @@ class EntryTest(unittest.TestCase):
             route={'files':'api/workspace','guest':'api/guest-session','provider':'api/run','account':'api/account'}[name]
             self.assertRegex('POST:/'+route,pattern);self.assertRegex('POST:/starhub/'+route,pattern)
             self.assertIsNone(re.search(pattern,'GET:/'+route));self.assertIsNone(re.search(pattern,'GET:/realtime'))
-        self.assertIn('limit_conn four_files_body 1;',text);self.assertIn('limit_conn four_guest_body 1;',text)
+        self.assertIn('limit_conn four_files_body 3;',text);self.assertIn('limit_conn four_files_large_body 1;',text);self.assertIn('limit_conn four_guest_body 1;',text)
         self.assertIn('limit_conn four_provider_body 2;',text);self.assertIn('limit_conn_status 429;',text)
         self.assertIn('if ($four_starhub_post_denied) { return 404; }',text)
         self.assertIn('if ($uri ~ ";") { return 400; }',text)
         self.assertIn('provider-media',text);self.assertIn('client_max_body_size 16k;',text);self.assertIn('client_max_body_size 1m;',text)
         self.assertIn('proxy_pass_request_body off;',text)
+
+    def test_workspace_size_boundary_and_preproxy_json_rejection_are_rendered(self):
+        import re
+        text=entry.render(config(),{a:[1,2] for a in entry.APPS})
+        block=re.search(r'map "\$content_length:\$http_transfer_encoding" \$four_workspace_size \{(.*?)\n    \}',text,re.S).group(1)
+        self.assertIn('default large;',block)
+        pattern=re.search(r'"~([^"]+)" small;',block).group(1)
+        for value in (0,1,999,1000,7999,8000,8191,8192):self.assertIsNotNone(re.fullmatch(pattern,str(value)+':'))
+        for value in (8193,8200,8999,9999,10000,999999):self.assertIsNone(re.fullmatch(pattern,str(value)+':'))
+        for value in (':','0:chunked','8192:chunked','-1:','00000:'):self.assertIsNone(re.fullmatch(pattern,value))
+        self.assertIn('default "";',re.search(r'map "\$request_method:\$uri:\$four_workspace_size" \$four_files_large_body \{(.*?)\n    \}',text,re.S).group(1))
+        star=text.split('server_name starhub.example.invalid;',1)[1].split('    server {',1)[0]
+        self.assertIn('error_page 429 = @workspace_busy;',star)
+        busy=star.split('location @workspace_busy {',1)[1].split('}',1)[0]
+        for name in ('X-Content-Type-Options','X-Frame-Options','Referrer-Policy','Strict-Transport-Security'):self.assertIn('add_header '+name,busy)
+        self.assertIn('"code":"SERVER_BUSY","dispatchState":"NOT_STARTED"',star)
+        self.assertIn('client_max_body_size 6m;',star)
+        self.assertIn('proxy_request_buffering off;',star)
 
     def test_bounded_star_json_streams_to_tomcat_without_request_spooling(self):
         text=entry.render(config(),{a:[1,2] for a in entry.APPS})
@@ -565,7 +742,7 @@ class EntryTest(unittest.TestCase):
 
     def test_loopback_admission_returns_only_freshness_authorization_without_user_data(self):
         state=entry.Admission();state.observed=state.clock();state.publish({a:[1] for a in entry.APPS})
-        server=ThreadingHTTPServer(('127.0.0.1',0),entry.handler(state));thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        server=ThreadingHTTPServer(('127.0.0.1',0),entry.handler(state,1));thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             base='http://127.0.0.1:'+str(server.server_port)
             self.assertEqual(entry.Http(1).get(base+'/admit/iafm').status,204)
@@ -575,6 +752,43 @@ class EntryTest(unittest.TestCase):
             self.assertEqual(entry.Http(1).get(base+'/ready').status,403)
             state.publish({a:[] for a in entry.APPS});self.assertEqual(entry.Http(1).get(base+'/admit/iafm').status,403)
         finally:server.shutdown();server.server_close();thread.join()
+
+    def test_local_admission_rejects_peer_only_health_and_keeps_global_route_semantics(self):
+        for local in (1,2):
+            state=entry.Admission();state.observed=state.clock()
+            server=ThreadingHTTPServer(('127.0.0.1',0),entry.handler(state,local))
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            try:
+                base='http://127.0.0.1:'+str(server.server_port)
+                for healthy in ([3-local],[local],[1,2],[]):
+                    state.publish({app:list(healthy) for app in entry.APPS})
+                    for app in ('iafm','starhub','ucost'):
+                        reply=entry.Http(1).get(base+'/local-admit/'+app)
+                        self.assertEqual(reply.status,204 if local in healthy else 403)
+                        self.assertEqual(reply.headers.get('cache-control'),'no-store')
+                        self.assertEqual(reply.body,b'')
+                        self.assertEqual(entry.Http(1).get(base+'/admit/'+app).status,204 if healthy else 403)
+            finally:server.shutdown();server.server_close();thread.join()
+
+    def test_local_admission_fails_closed_for_unobserved_expired_unknown_and_caller_node_override(self):
+        now=[10.0];state=entry.Admission(15,lambda:now[0]);state.publish({app:[1,2] for app in entry.APPS})
+        server=ThreadingHTTPServer(('127.0.0.1',0),entry.handler(state,1))
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            base='http://127.0.0.1:'+str(server.server_port)
+            self.assertEqual(entry.Http(1).get(base+'/local-admit/iafm').status,403)
+            state.observed=10.0
+            self.assertEqual(entry.Http(1).get(base+'/local-admit/iafm').status,204)
+            for path in ('/local-admit/unknown','/local-admit/1/iafm','/local-admit/iafm?nodeId=2'):
+                self.assertEqual(entry.Http(1).get(base+path).status,403)
+            now[0]=26.0;self.assertEqual(entry.Http(1).get(base+'/local-admit/iafm').status,403)
+            now[0]=9.0;self.assertEqual(entry.Http(1).get(base+'/local-admit/iafm').status,403)
+        finally:server.shutdown();server.server_close();thread.join()
+
+    def test_handler_requires_an_explicit_known_local_node_without_a_production_default(self):
+        with self.assertRaises(TypeError):entry.handler(entry.Admission())
+        for invalid in (None,True,'1',0,3):
+            with self.assertRaises(entry.Closed):entry.handler(entry.Admission(),invalid)
 
     def test_successful_publication_is_private_deduplicated_and_refuses_an_unrelated_pid(self):
         with tempfile.TemporaryDirectory() as folder:

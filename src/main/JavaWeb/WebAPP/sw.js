@@ -1,4 +1,4 @@
-const CACHE = 'finance-workspace-shell-protocol-two-snapshots';
+const CACHE = 'finance-workspace-shell-assets-309e29cb5ad8161f';
 let cachingEnabled = true;
 self.addEventListener('message', event => {
     if (event.data === 'disable-offline-cache') {
@@ -6,7 +6,7 @@ self.addEventListener('message', event => {
         event.ports[0]?.postMessage('disabled');
     }
 });
-const SHELL = ['./','./index.html','./assets/css/app.css','./assets/js/app.js','./assets/js/snapshots.js','./assets/js/connection-status.js','./assets/js/operations.js','./assets/js/login-operations.js','./assets/icons/favicon.svg','./manifest.webmanifest','./privacy-policy.html','./exchange-rates.html','./assets/js/exchange-rates.js'];
+const SHELL = ['./','./index.html','./assets/css/app.css?v=73ef39f32d07e12d','./assets/js/app.js?v=b2de00948ea67543','./assets/js/snapshots.js?v=3c6e2337f91e05ff','./assets/js/connection-status.js?v=309e29cb5ad8161f','./assets/js/operations.js?v=0ea96c0bbc5ff688','./assets/js/login-operations.js?v=c9999540853f36c5','./assets/icons/favicon.svg','./manifest.webmanifest','./privacy-policy.html','./exchange-rates.html','./assets/js/exchange-rates.js?v=856bedbd719aebbc'];
 const SHELL_URLS = new Set(SHELL.map(path => new URL(path, self.registration.scope).href));
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('finance-workspace-shell-') && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));

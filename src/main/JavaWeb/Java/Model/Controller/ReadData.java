@@ -80,6 +80,6 @@ public final class ReadData {
         JSONObject report = assetSummary(user, input);
         for (JSONObject part : new JSONObject[]{cashflowSummary(user, input), earningsSummary(user, input), riskSummary(user, input)})
             for (String key : part.keySet()) report.put(key, part.get(key));
-        return report;
+        return report.put("exchangeReference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
     }
 }

@@ -7,7 +7,7 @@ import java.util.*;
 import static org.junit.Assert.*;
 
 public class AtomicRecoveryProbeTest {
-    private static final class Fixture {
+    static final class Fixture {
         final String url="jdbc:h2:mem:probe_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1";
         final Properties properties=new Properties();boolean reject;
         final AtomicFinanceTransactions.Authority authority=new AtomicFinanceTransactions.Authority(){

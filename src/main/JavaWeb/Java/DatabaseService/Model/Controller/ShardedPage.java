@@ -6,8 +6,11 @@ import org.json.JSONObject;
 import java.sql.*;
 import java.util.*;
 
-/** Bounded-memory merge of both node cursors; pagination is applied after the global ordering. */
+/** Bounded-window merge of both logical schemas inside their original transaction. */
 final class ShardedPage {
+    // Both schemas can share one physical MySQL connection. Never keep a
+    // streaming ResultSet open while switching to the other schema.
+    static final int FETCH_WINDOW = 64;
     @FunctionalInterface interface Decoder { JSONObject decode(ResultSet result, int publicColumns) throws SQLException; }
     private record Order(String expression, boolean descending, boolean numeric, boolean text) { }
     private static List<Order> order(String value) {
@@ -32,16 +35,24 @@ final class ShardedPage {
         for (int i = 0; i < values.size(); i++) statement.setObject(i + 1, values.get(i));
     }
     private static final class Cursor implements AutoCloseable {
-        final int node, publicColumns;
-        final PreparedStatement statement;
-        final ResultSet result;
+        private record Row(JSONObject item, Object[] keys) { }
+        final int node;
+        final Connection connection;
+        final String sql;
+        final List<Object> parameters;
+        final boolean mysql;
         final List<Order> order;
         final Decoder decoder;
+        List<Row> window = List.of();
+        int next;
+        long fetched;
+        boolean exhausted, closed;
         Object[] keys;
         JSONObject item;
         Cursor(Connection connection, String columns, String from, List<Object> parameters, List<Order> order, Decoder decoder) throws SQLException {
-            node = ShardScope.nodeOf(connection); this.order = order; this.decoder = decoder;
-            boolean mysql = connection.getMetaData().getDatabaseProductName().contains("MySQL");
+            node = ShardScope.nodeOf(connection); this.connection = connection;
+            this.order = order; this.decoder = decoder; this.parameters = new ArrayList<>(parameters);
+            mysql = connection.getMetaData().getDatabaseProductName().contains("MySQL");
             StringBuilder projection = new StringBuilder(columns), ordering = new StringBuilder();
             for (int i = 0; i < order.size(); i++) {
                 Order term = order.get(i);
@@ -50,25 +61,47 @@ final class ShardedPage {
                 if (i > 0) ordering.append(", ");
                 ordering.append("__shard_sort_").append(i).append(term.descending ? " DESC" : " ASC");
             }
-            statement = connection.prepareStatement("SELECT " + projection + from + " ORDER BY " + ordering,
-                    ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-            try {
+            sql = "SELECT " + projection + from + " ORDER BY " + ordering + " LIMIT ? OFFSET ?";
+            advance();
+        }
+        private void fetchWindow() throws SQLException {
+            List<Row> rows = new ArrayList<>(FETCH_WINDOW);
+            try (PreparedStatement statement = connection.prepareStatement(sql,
+                    ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
                 statement.setFetchSize(mysql ? Integer.MIN_VALUE : 100);
-                bind(statement, parameters); result = statement.executeQuery();
-                publicColumns = result.getMetaData().getColumnCount() - order.size();
-                advance();
-            } catch (SQLException | RuntimeException failure) { statement.close(); throw failure; }
+                bind(statement, parameters);
+                statement.setInt(parameters.size() + 1, FETCH_WINDOW);
+                statement.setLong(parameters.size() + 2, fetched);
+                try (ResultSet result = statement.executeQuery()) {
+                    int publicColumns = result.getMetaData().getColumnCount() - order.size();
+                    while (result.next()) {
+                        JSONObject decoded = decoder.decode(result, publicColumns).put("databaseId", node);
+                        if (decoded.has("generation")) decoded.put("recordKey", node + ":" + decoded.getInt("id") + ":" + decoded.getString("generation"));
+                        Object[] values = new Object[order.size()];
+                        for (int i = 0; i < order.size(); i++) values[i] = order.get(i).text ? result.getBytes(publicColumns + i + 1)
+                                : order.get(i).numeric ? result.getBigDecimal(publicColumns + i + 1) : result.getString(publicColumns + i + 1);
+                        rows.add(new Row(decoded, values));
+                    }
+                }
+            }
+            // Both JDBC resources are closed before this cursor can enter the
+            // global merge or another logical schema can prepare a statement.
+            fetched = Math.addExact(fetched, rows.size());
+            exhausted = rows.size() < FETCH_WINDOW;
+            window = rows; next = 0;
         }
         boolean advance() throws SQLException {
-            if (!result.next()) { item = null; return false; }
-            item = decoder.decode(result, publicColumns).put("databaseId", node);
-            if (item.has("generation")) item.put("recordKey", node + ":" + item.getInt("id") + ":" + item.getString("generation"));
-            keys = new Object[order.size()];
-            for (int i = 0; i < order.size(); i++) keys[i] = order.get(i).text ? result.getBytes(publicColumns + i + 1)
-                    : order.get(i).numeric ? result.getBigDecimal(publicColumns + i + 1) : result.getString(publicColumns + i + 1);
+            if (closed) throw new SQLException("Pagination cursor is closed");
+            if (next == window.size()) {
+                window = List.of();
+                if (!exhausted) fetchWindow();
+                if (window.isEmpty()) { item = null; keys = null; return false; }
+            }
+            Row row = window.get(next++);
+            item = row.item; keys = row.keys;
             return true;
         }
-        @Override public void close() throws SQLException { try { result.close(); } finally { statement.close(); } }
+        @Override public void close() throws SQLException { closed = true; window = List.of(); item = null; keys = null; }
     }
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static int compare(Cursor left, Cursor right) {

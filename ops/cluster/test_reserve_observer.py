@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import reserve_observer as observer
-from install_node import reserved_blocks
+from reserve_observer import required_root_blocks as reserved_blocks
 
 
 class ReserveBoundaryTest(unittest.TestCase):

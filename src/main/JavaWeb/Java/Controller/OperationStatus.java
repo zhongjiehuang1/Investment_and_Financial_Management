@@ -26,7 +26,8 @@ public final class OperationStatus extends HttpServlet {
             ApiSupport.serveParsedRead(request,response,input,(user,body)->{
                 RequestIdentity.verifyCurrentUser();return FinanceCluster.get().status(user,operation);
             });
-        }catch(ApiSupport.Failure invalid){response.setStatus(invalid.httpStatus());ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Operation result request denied."));}
+        }catch(FinanceCluster.Busy busy){ApiSupport.busy(response);}
+        catch(ApiSupport.Failure invalid){response.setStatus(invalid.httpStatus());ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Operation result request denied."));}
         catch(IllegalArgumentException|org.json.JSONException invalid){response.setStatus(400);ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Enter a valid operation identity."));}
         catch(Exception unavailable){response.setStatus(503);ApiSupport.write(response,new JSONObject().put("status","failure").put("code","CLUSTER_UNAVAILABLE").put("message",ClusterAvailability.MESSAGE));}
     }

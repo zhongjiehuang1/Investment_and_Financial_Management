@@ -21,7 +21,8 @@ public final class LoginStatus extends HttpServlet {
             int status=result.getInt("httpStatus");response.setStatus(status);
             if(status==429)response.setHeader("Retry-After","60");
             ApiSupport.write(response,result);
-        }catch(ApiSupport.Failure invalid){response.setStatus(invalid.httpStatus());ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Sign-in result request denied."));}
+        }catch(DatabaseService.FinanceCluster.Busy busy){ApiSupport.busy(response);}
+        catch(ApiSupport.Failure invalid){response.setStatus(invalid.httpStatus());ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Sign-in result request denied."));}
         catch(IllegalArgumentException|org.json.JSONException invalid){response.setStatus(400);ApiSupport.write(response,new JSONObject().put("status","failure").put("message","Enter valid sign-in result details."));}
         catch(Exception unavailable){response.setStatus(503);ApiSupport.write(response,new JSONObject().put("status","failure").put("code","CLUSTER_UNAVAILABLE").put("message",ClusterAvailability.MESSAGE));}
     }

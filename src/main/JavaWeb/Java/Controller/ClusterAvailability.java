@@ -26,6 +26,10 @@ public final class ClusterAvailability {
 
     public static boolean ready() {
         if (passive()) return false;
+        try {
+            if (DatabaseService.FinanceCluster.singleDatabaseSelected())
+                return DatabaseService.FinanceCluster.singleDatabaseReady();
+        } catch (RuntimeException invalidConfiguration) { return false; }
         String required = setting("iafm.cluster.health.required", "IAFM_CLUSTER_HEALTH_REQUIRED", "false");
         String address = setting("iafm.cluster.health.url", "IAFM_CLUSTER_HEALTH_URL", "");
         if (address.isEmpty()) return "false".equals(required);

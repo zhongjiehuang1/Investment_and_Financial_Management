@@ -31,6 +31,10 @@ RECOVERY = {"iafm": "/internal/recovery-ready", "starhub": "/api/internal/recove
 PROOF_HEADERS = ("MySQL-UUID", "View-ID", "Epoch", "Mode", "Membership", "Permit", "Controller-Boot-ID")
 AUDIT_FILENAME = "durability-audit.jsonl"
 
+# Exact reviewed public WAR members and directory shell routes.
+# Review these after changing published assets.
+LOCAL_STATIC_PATHS = {'iafm': ('/', '/View/Login-sub/Register/register.html', '/View/Login-sub/Services-sub/AllCurrentAssets/allCurrentAssets.html', '/View/Login-sub/Services-sub/FinancialReport/financialReport.html', '/View/Login-sub/Services-sub/IncomeAndExpenditureData/incomeAndExpenditureData.html', '/View/Login-sub/Services-sub/InflationRatesData/inflationRatesData.html', '/View/Login-sub/Services/services.html', '/View/Login/login.html', '/assets/css/app.css', '/assets/icons/favicon.svg', '/assets/js/app.js', '/assets/js/connection-status.js', '/assets/js/exchange-rates.js', '/assets/js/login-operations.js', '/assets/js/operations.js', '/assets/js/snapshots.js', '/errors/404.html', '/errors/500.html', '/exchange-rates.html', '/index.html', '/manifest.webmanifest', '/privacy-policy.html', '/sw.js'), 'starhub': ('/', '/access.css', '/account.js', '/advanced.js', '/api-links.js', '/app.css', '/app.js', '/audio-capture.js', '/chat-pages.js', '/cloud.js', '/cookie-settings.js', '/experience.js', '/gentle-motion.js', '/i18n-data.js', '/i18n.js', '/icon.svg', '/index.html', '/markdown.js', '/parameters.js', '/provider-media.js', '/provider-operations.js', '/replies.js', '/source-viewer.js', '/storage.js', '/vendor/marked.min.js', '/vendor/purify.min.js', '/workspace-refresh.css', '/workspace-ui.js'), 'ucost': ('/', '/app.js', '/auth-operations.js', '/cloud-operations.js', '/engine.js', '/i18n.css', '/i18n.js', '/index.html', '/product-links.js', '/request-deadline.js', '/server-identity.js', '/style.css', '/ucost-icon.png'), 'portfolio': ('/', '/404.html', '/about/', '/about/index.html', '/assets/app.6d2cab472a76.js', '/assets/bsc-results-en.svg', '/assets/bsc-results-zh.svg', '/assets/deployment-globe.416f6205954f.js', '/assets/deployment-globe.e496d636c8de.css', '/assets/earth-blue-marble-2048.9a94996c0b70.jpg', '/assets/favicon.svg', '/assets/research.7c4ccecf6969.css', '/assets/research.d885d71b85eb.js', '/assets/styles.3d1a0466a9ea.css', '/assets/system-explainer.027c15273d01.css', '/assets/system-explainer.a20c797449f2.js', '/assets/zhongjie-huang-480.webp', '/assets/zhongjie-huang-720.jpg', '/assets/zhongjie-huang-720.webp', '/assets/zhongjie-huang-960.webp', '/build-info.json', '/contact/', '/contact/index.html', '/cv/', '/cv/index.html', '/education/', '/education/degree-credential/', '/education/degree-credential/index.html', '/education/index.html', '/files/degree-certificate.pdf', '/files/zhongjie-huang-cv-en.pdf', '/files/zhongjie-huang-cv-zh.pdf', '/files/zhongjie-huang-profile.json', '/index.html', '/insights/research-validation/', '/insights/research-validation/index.html', '/manifest.webmanifest', '/now/', '/now/index.html', '/privacy.html', '/projects/', '/projects/emotion-recognition/', '/projects/emotion-recognition/index.html', '/projects/histology-segmentation/', '/projects/histology-segmentation/index.html', '/projects/index.html', '/projects/investment-financial-management/', '/projects/investment-financial-management/index.html', '/projects/pelagivex/', '/projects/pelagivex/index.html', '/projects/star-hub/', '/projects/star-hub/index.html', '/projects/two-server-system/', '/projects/two-server-system/index.html', '/research/', '/research/index.html', '/robots.txt', '/sitemap.xml', '/skills/', '/skills/index.html', '/zh/', '/zh/404.html', '/zh/about/', '/zh/about/index.html', '/zh/contact/', '/zh/contact/index.html', '/zh/cv/', '/zh/cv/index.html', '/zh/education/', '/zh/education/degree-credential/', '/zh/education/degree-credential/index.html', '/zh/education/index.html', '/zh/index.html', '/zh/insights/research-validation/', '/zh/insights/research-validation/index.html', '/zh/now/', '/zh/now/index.html', '/zh/privacy.html', '/zh/projects/', '/zh/projects/emotion-recognition/', '/zh/projects/emotion-recognition/index.html', '/zh/projects/histology-segmentation/', '/zh/projects/histology-segmentation/index.html', '/zh/projects/index.html', '/zh/projects/investment-financial-management/', '/zh/projects/investment-financial-management/index.html', '/zh/projects/pelagivex/', '/zh/projects/pelagivex/index.html', '/zh/projects/star-hub/', '/zh/projects/star-hub/index.html', '/zh/projects/two-server-system/', '/zh/projects/two-server-system/index.html', '/zh/research/', '/zh/research/index.html', '/zh/skills/', '/zh/skills/index.html')}
+
 
 class Closed(Exception):
     pass
@@ -56,11 +60,24 @@ def endpoint(value):
 
 
 def validate(config):
+    topology = config.get("databaseTopology", "replicated")
+    require(topology in ("replicated", "single-database"), "Explicit supported database topology required")
+    if topology == "single-database":
+        shared = config.get("singleDatabase", {})
+        require(set(shared) == {"mysqlUuid", "monitorUrl", "monitorToken"}, "Single database identity and monitor required")
+        require(str(uuid.UUID(shared["mysqlUuid"])) == shared["mysqlUuid"], "Pinned single database UUID required")
+        require(endpoint(shared["monitorUrl"]) == "http://127.0.0.1:942", "Pinned database-only monitor required")
+        require(isinstance(shared["monitorToken"], str) and re.fullmatch(r"[A-Za-z0-9_-]{32,}", shared["monitorToken"]), "Private database monitor token required")
     require(config.get("nodeId") in (1, 2) and type(config["nodeId"]) is int, "Physical node ID required")
     require(config.get("listenAddress", "127.0.0.1") in ("127.0.0.1", "0.0.0.0"), "Explicit entry bind required")
     require(config.get("listenPort") in (18443, 18444, 443), "Known staged or formal TLS port required")
     require(config.get("listenAddress", "127.0.0.1") == "127.0.0.1" or config["listenPort"] == 443,
             "Staged entries must stay loopback-only")
+    if "applicationFailover" in config:
+        require(config["applicationFailover"] is False and topology == "single-database",
+                "Local-only application routing requires explicit false and the single database")
+        require(config.get("privateAcceptanceBackendRouting", False) is False,
+                "Peer backend override is forbidden in local-only mode")
     if "privateAcceptanceBackendRouting" in config:
         require(type(config["privateAcceptanceBackendRouting"]) is bool,
                 "Private acceptance backend routing must be an explicit boolean")
@@ -83,11 +100,16 @@ def validate(config):
     require(re.fullmatch(r"[a-z_][a-z0-9_-]*", config.get("nginxUser", "www-data")), "Nginx account required")
     require(set(config["nodes"]) == {"1", "2"} and set(config["applications"]) == set(APPS), "Exactly two nodes and four projects required")
     for node_id, node in config["nodes"].items():
-        require(endpoint(node["tomcat"]) == "http://127.0.0.1:" + str(880 + int(node_id))
-                and endpoint(node["controller"]) == "http://127.0.0.1:" + str(940 + int(node_id)),
-                "Pinned node-specific privileged service endpoints required")
+        require(endpoint(node["tomcat"]) == "http://127.0.0.1:" + str(880 + int(node_id)),
+                "Pinned node-specific application endpoint required")
+        # The single-database path never consults retired controller leases.
+        # Accept older valid fields during migration but no longer require them.
+        if topology != "single-database" or "controller" in node:
+            require(endpoint(node["controller"]) == "http://127.0.0.1:" + str(940 + int(node_id)),
+                    "Pinned node-specific controller endpoint required")
         for key in ("appToken", "readyToken"):
-            require(isinstance(node.get(key), str) and re.fullmatch(r"[A-Za-z0-9_-]{32,}", node[key]), "Private probe credential required")
+            if topology != "single-database" or key in node:
+                require(isinstance(node.get(key), str) and re.fullmatch(r"[A-Za-z0-9_-]{32,}", node[key]), "Private probe credential required")
     for app, values in config["applications"].items():
         require(re.fullmatch(r"[a-z0-9][a-z0-9.-]+", values["hostname"]), "Explicit DNS hostname required")
         safe_path(values["certificate"]); safe_path(values["privateKey"])
@@ -296,7 +318,52 @@ class Prober:
         reply = self.http.get(url, token, limit=65_536)
         return StatusObservation(reply, started, int(time.time() * 1000), time.monotonic())
 
+    def single_database_node(self, node_id):
+        node = self.config["nodes"][str(node_id)]
+        base = endpoint(node["tomcat"])
+        result = {app: False for app in APPS}
+        try:
+            result["portfolio"] = self.portfolio(node_id, base)
+        except Exception:
+            pass
+        shared = self.config["singleDatabase"]
+        try:
+            observation = self.status(shared["monitorUrl"] + "/status", shared["monitorToken"])
+            reply = observation.reply
+            require(reply.status == 200, "Single database is unavailable")
+            value = reply.object()
+            observed = value.get("observedAtMillis")
+            now = int(time.time() * 1000)
+            require(value.get("topology") == "single-database" and value.get("mode") == "single"
+                    and value.get("nodeId") == 2 and value.get("mysqlUuid") == shared["mysqlUuid"]
+                    and value.get("mysqlReady") is True and value.get("ready") is True
+                    and value.get("reserveGuaranteed") is True and value.get("floorBytes") == CAPACITY_FLOOR_BYTES
+                    and type(observed) is int and 0 <= now - observed <= 5000,
+                    "Fresh real single database/capacity readiness required")
+            checks = {}
+            for app in APPS[:-1]:
+                context = base + "/" + CONTEXT[app]
+                checks[app + "-recovery"] = (context + RECOVERY[app], self.config["applications"][app]["recoveryToken"])
+                checks[app + "-identity"] = (context + "/api/server", None)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                futures = {key: pool.submit(self.http.get, url, token) for key, (url, token) in checks.items()}
+                replies = {}
+                for key, future in futures.items():
+                    try: replies[key] = future.result()
+                    except Exception: replies[key] = Reply(503, {}, b"")
+            for app in APPS[:-1]:
+                try:
+                    identity = replies[app + "-identity"].object()
+                    result[app] = replies[app + "-recovery"].status == 204 and type(identity.get("serverId")) is int and identity["serverId"] == node_id
+                except Exception:
+                    result[app] = False
+            return result, hashlib.sha256((shared["mysqlUuid"] + ":single-database").encode()).hexdigest()
+        except Exception:
+            return result, ""
+
     def node(self, node_id):
+        if self.config.get("databaseTopology") == "single-database":
+            return self.single_database_node(node_id)
         node = self.config["nodes"][str(node_id)]
         base = endpoint(node["tomcat"])
         result = {app: False for app in APPS}
@@ -348,6 +415,11 @@ class Prober:
         return result, fingerprint
 
     def all(self):
+        if self.config.get("applicationFailover") is False:
+            local = self.config["nodeId"]
+            observations = {1: ({app: False for app in APPS}, ""), 2: ({app: False for app in APPS}, "")}
+            observations[local] = self.node(local)
+            return observations
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {node: pool.submit(self.node, node) for node in (1, 2)}
             return {node: future.result() for node, future in futures.items()}
@@ -387,6 +459,13 @@ class Admission:
             return (app in APPS and self.observed is not None and 0 <= self.clock() - self.observed <= self.max_age
                     and bool(self.healthy[app]))
 
+    def locally_admitted(self, app, node_id):
+        """Fast local application gate; never calls back into a Java monitor."""
+        with self.lock:
+            return (type(node_id) is int and node_id in (1, 2) and app in APPS
+                    and self.observed is not None and 0 <= self.clock() - self.observed <= self.max_age
+                    and node_id in self.healthy[app])
+
     def snapshot(self):
         with self.lock:
             age = None if self.observed is None else self.clock() - self.observed
@@ -405,7 +484,7 @@ def upstream(app, preference, healthy, nodes):
         lines.append(f"        server {host}{' backup' if backup else ''} max_fails=1 fail_timeout=3s;")
     if not lines:
         lines = ["        server 127.0.0.1:9 down;"]
-    return "    upstream " + name + " {\n" + "\n".join(lines) + "\n    }\n"
+    return "    upstream " + name + " {\n" + "\n".join(lines) + "\n        keepalive 2;\n        keepalive_requests 32;\n        keepalive_timeout 10s;\n    }\n"
 
 
 def render(config, healthy):
@@ -441,6 +520,13 @@ http {{
     access_log {directory}/private/{AUDIT_FILENAME} four_response_durability;
     log_subrequest off;
     server_tokens off;
+    # Only immutable public Portfolio asset routes use this response policy.
+    # An error or redirect is never retained as a successful static resource.
+    map $status $four_public_asset_cache {{
+        default "no-store";
+        200 "public, max-age=31536000, immutable";
+        304 "public, max-age=31536000, immutable";
+    }}
     client_body_temp_path {directory}/client-body;
     proxy_temp_path {directory}/proxy-temp;
     client_body_timeout 30s;
@@ -458,6 +544,17 @@ http {{
     map "$request_method:$uri" $four_files_body {{
         default "";
         ~^POST:/(?:starhub/)?api/workspace$ "$server_name:files";
+    }}
+    # A missing length, transfer encoding, malformed length, or noncanonical
+    # large value is conservatively treated as a large body. Nginx validates
+    # framing before these maps are consulted.
+    map "$content_length:$http_transfer_encoding" $four_workspace_size {{
+        default large;
+        "~^(?:[0-9]{{1,3}}|[0-7][0-9]{{3}}|80[0-9]{{2}}|81[0-8][0-9]|819[0-2]):$" small;
+    }}
+    map "$request_method:$uri:$four_workspace_size" $four_files_large_body {{
+        default "";
+        ~^POST:/(?:starhub/)?api/workspace:large$ "$server_name:files-large";
     }}
     map "$request_method:$uri" $four_guest_body {{
         default "";
@@ -477,21 +574,25 @@ http {{
         ~^POST: 1;
     }}
     limit_conn_zone $four_files_body zone=four_files_body:1m;
+    limit_conn_zone $four_files_large_body zone=four_files_large_body:1m;
     limit_conn_zone $four_guest_body zone=four_guest_body:1m;
     limit_conn_zone $four_provider_body zone=four_provider_body:1m;
     limit_conn_zone $four_account_body zone=four_account_body:1m;
 '''
+    local_only = config.get("applicationFailover") is False
     for app in APPS:
+        nodes = [n for n in healthy[app] if not local_only or n == config["nodeId"]]
         for preference in ("any", "n1", "n2"):
-            text += upstream(app, preference, healthy[app], config["nodes"])
+            text += upstream(app, preference, nodes, config["nodes"])
+        if local_only:
+            text += upstream(app, "static", [config["nodeId"]], config["nodes"])
         cookie = "$cookie_UCOST_SESSION" if app == "ucost" else "$cookie_JSESSIONID"
         private_route = app == "starhub" and config.get("privateAcceptanceBackendRouting", False)
         cookie_target = f"$four_{app}_cookie_upstream" if private_route else f"$four_{app}_upstream"
+        cookie_rules = "" if local_only else f"        ~[.]n1$ four_{app}_n1;\n        ~[.]n2$ four_{app}_n2;\n"
         text += f'''    map {cookie} {cookie_target} {{
         default four_{app}_any;
-        ~[.]n1$ four_{app}_n1;
-        ~[.]n2$ four_{app}_n2;
-    }}
+{cookie_rules}    }}
 '''
         if private_route:
             # Affinity tests must preserve the complete replicated session ID.
@@ -559,7 +660,10 @@ http {{
             proxy_redirect {context + '/' if context else '/'} /;
             {absolute_redirect}
             proxy_pass http://$four_{app}_upstream{context}{public_uri};'''
-        body_limits = '''limit_conn four_files_body 1;
+        static_common = common.replace("auth_request /_entry_admit;", "").replace(
+            f"$four_{app}_upstream", f"four_{app}_static") if local_only else ""
+        body_limits = '''limit_conn four_files_body 3;
+        limit_conn four_files_large_body 1;
         limit_conn four_guest_body 1;
         limit_conn four_provider_body 2;
         limit_conn four_account_body 1;
@@ -627,6 +731,115 @@ http {{
             {common}
         }}
 '''
+        if local_only:
+            # Exact reviewed static members only; local servlet security still applies.
+            path_alternatives = "|".join(re.escape(path) for path in LOCAL_STATIC_PATHS[app])
+            context_prefix = ("(?:" + re.escape(context) + ")?" if context else "")
+            text += f'''        location ~ "^{context_prefix}(?:{path_alternatives})$" {{
+            if ($request_method !~ ^(GET|HEAD)$) {{ return 405; }}
+            if ($request_uri ~* "(?:%2f|%5c|%2e|%3b|(?:^|/)\\.\\.(?:/|\\?|$)|;)") {{ return 400; }}
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_next_upstream off;
+            {static_common}
+        }}
+'''
+        if app == "portfolio" and not local_only:
+            # These generated content-addressed CSS/JS are public static bytes.
+            # No API, HTML, user upload or authenticated response is compressed
+            # or made cacheable by this route. POSTs are never retried.
+            text += f'''        location ~ "^/assets/[A-Za-z0-9_-]+[.][0-9a-f]{{12}}[.](?:css|js)$" {{
+            if ($request_method !~ ^(GET|HEAD)$) {{ return 405; }}
+            gzip on;
+            gzip_min_length 1024;
+            gzip_comp_level 3;
+            gzip_types text/css application/javascript text/javascript;
+            gzip_vary on;
+            gzip_proxied any;
+            proxy_set_header Cookie "";
+            proxy_set_header Authorization "";
+            proxy_hide_header Cache-Control;
+            proxy_hide_header Expires;
+            add_header Cache-Control $four_public_asset_cache always;
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-Frame-Options DENY always;
+            add_header Referrer-Policy no-referrer always;
+            add_header Strict-Transport-Security "max-age=31536000" always;
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_next_upstream error timeout invalid_header http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+            proxy_next_upstream_timeout 6s;
+            {common}
+        }}
+'''
+        if app != "iafm" and not local_only:
+            # HTML publication must not reuse colliding fixed-time WAR validators.
+            # Keep public assets cacheable; only small document entrypoints match.
+            shell_pattern = (r"^/(?:[A-Za-z0-9_-]+/)*(?:[A-Za-z0-9_-]+[.]html)?$" if app == "portfolio"
+                             else rf"^/(?:{CONTEXT[app]}/)?(?:index[.]html)?$")
+            text += f'''        location ~ "{shell_pattern}" {{
+            recursive_error_pages on;
+            error_page 403 500 502 503 504 =503 @entry_unavailable;
+            error_page 418 = @{app}_shell_read;
+            if ($request_method ~ ^(GET|HEAD)$) {{ return 418; }}
+            proxy_next_upstream off;
+            {common}
+        }}
+        location @{app}_shell_read {{
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header If-None-Match "";
+            proxy_set_header If-Modified-Since "";
+            proxy_hide_header ETag;
+            proxy_hide_header Last-Modified;
+            proxy_hide_header Cache-Control;
+            proxy_hide_header Expires;
+            add_header Cache-Control "no-store" always;
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-Frame-Options DENY always;
+            add_header Referrer-Policy no-referrer always;
+            add_header Strict-Transport-Security "max-age=31536000" always;
+            proxy_next_upstream error timeout invalid_header http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+            proxy_next_upstream_timeout 6s;
+            {common}
+        }}
+'''
+        if app == "iafm" and not local_only:
+            # Reproducible WARs can give different shell bytes the same size
+            # and ZIP timestamp. Tomcat's weak validators then collide. Only
+            # these small publication entrypoints require a complete response;
+            # fingerprinted JS/CSS keep their existing caching behavior.
+            text += f'''        location ~ ^/(?:Investment_and_Financial_Management/)?(?:index[.]html|privacy-policy[.]html|exchange-rates[.]html|sw[.]js)?$ {{
+            recursive_error_pages on;
+            error_page 403 500 502 503 504 =503 @entry_unavailable;
+            error_page 418 = @iafm_shell_read;
+            if ($request_method ~ ^(GET|HEAD)$) {{ return 418; }}
+            proxy_next_upstream off;
+            {common}
+        }}
+        location @iafm_shell_read {{
+            proxy_pass_request_body off;
+            proxy_set_header Content-Length "";
+            proxy_set_header If-None-Match "";
+            proxy_set_header If-Modified-Since "";
+            proxy_hide_header ETag;
+            proxy_hide_header Last-Modified;
+            proxy_hide_header Cache-Control;
+            proxy_hide_header Expires;
+            add_header Cache-Control "no-store" always;
+            # A local add_header disables all inherited add_header rules.
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-Frame-Options DENY always;
+            add_header Referrer-Policy no-referrer always;
+            add_header Strict-Transport-Security "max-age=31536000" always;
+            proxy_next_upstream error timeout invalid_header http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+            proxy_next_upstream_timeout 6s;
+            {common}
+        }}
+'''
         if app == "ucost":
             text += f'''        location ~ ^/(?:ucost/)?api/(login|register|password)$ {{
             limit_req zone=four_ucost_auth burst=10 nodelay;
@@ -636,7 +849,27 @@ http {{
         }}
 '''
         if app == "starhub":
-            text += f'''        location ~ ^/(?:starhub/)?_access$ {{
+            text += f'''        location ~ ^/(?:starhub/)?api/workspace$ {{
+            recursive_error_pages on;
+            error_page 403 500 502 503 504 =503 @entry_unavailable;
+            error_page 429 = @workspace_busy;
+            error_page 418 = @safe_read;
+            if ($request_method ~ ^(GET|HEAD)$) {{ return 418; }}
+            proxy_next_upstream off;
+            {common}
+        }}
+        location @workspace_busy {{
+            recursive_error_pages off;
+            default_type application/json;
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-Frame-Options DENY always;
+            add_header Referrer-Policy no-referrer always;
+            add_header Strict-Transport-Security "max-age=31536000" always;
+            add_header Cache-Control no-store always;
+            add_header Retry-After 1 always;
+            return 429 '{{"code":"SERVER_BUSY","dispatchState":"NOT_STARTED","error":"Server is busy. Please try again shortly."}}';
+        }}
+        location ~ ^/(?:starhub/)?_access$ {{
             client_max_body_size 16k;
             limit_req zone=four_starhub_access burst=5 nodelay;
             limit_req_status 429;
@@ -691,6 +924,9 @@ http {{
         }
     }
 '''
+    if local_only:
+        text = text.replace("proxy_next_upstream error timeout invalid_header http_502 http_503 http_504;", "proxy_next_upstream off;")
+        text = text.replace("proxy_next_upstream_tries 2;", "").replace("proxy_next_upstream_timeout 6s;", "")
     return text + "}\n"
 
 
@@ -953,7 +1189,8 @@ class Publisher:
             raise
 
 
-def handler(admission):
+def handler(admission, local_node_id):
+    require(type(local_node_id) is int and local_node_id in (1, 2), "Known local admission node required")
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == "/status":
@@ -963,8 +1200,13 @@ def handler(admission):
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(raw)))
                 self.end_headers(); self.wfile.write(raw); return
-            app = self.path.removeprefix("/admit/") if self.path.startswith("/admit/") else ""
-            self.send_response(204 if admission.admitted(app) else 403)
+            if self.path.startswith("/local-admit/"):
+                app = self.path.removeprefix("/local-admit/")
+                allowed = admission.locally_admitted(app, local_node_id)
+            else:
+                app = self.path.removeprefix("/admit/") if self.path.startswith("/admit/") else ""
+                allowed = admission.admitted(app)
+            self.send_response(204 if allowed else 403)
             self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", "0"); self.end_headers()
 
         def log_message(self, *_args):
@@ -1011,7 +1253,7 @@ def serve(config):
     admission = Admission(config.get("maxAgeSeconds", 15))
     publisher = Publisher(config)
     publisher.publish({app: [] for app in APPS})
-    server = ThreadingHTTPServer(("127.0.0.1", config["admissionPort"]), handler(admission))
+    server = ThreadingHTTPServer(("127.0.0.1", config["admissionPort"]), handler(admission, config["nodeId"]))
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
     notify_ready()

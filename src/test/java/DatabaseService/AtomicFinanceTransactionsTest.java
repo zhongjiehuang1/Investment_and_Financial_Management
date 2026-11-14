@@ -14,14 +14,15 @@ import static org.junit.Assert.*;
 /** Local atomicity tests. H2 is NOT evidence for MySQL GR certification/failover. */
 public class AtomicFinanceTransactionsTest {
     private static final String ONE="CANONICAL", TWO="PEER";
-    private static final class Gate implements AtomicFinanceTransactions.Authority {
+    static final class Gate implements AtomicFinanceTransactions.Authority {
         volatile String mode="dual";
         final AtomicBoolean rejectBefore=new AtomicBoolean(),rejectAfter=new AtomicBoolean();
+        final AtomicInteger confirmations=new AtomicInteger();
         public AtomicFinanceTransactions.Proof capture(){return new AtomicFinanceTransactions.Proof("11111111-1111-1111-1111-111111111111","view-1","1",mode,"a".repeat(64),"22222222-2222-4222-8222-222222222222","permit-"+mode);}
         public void verify(AtomicFinanceTransactions.Proof proof)throws SQLException {if(rejectBefore.getAndSet(false)||!proof.equals(capture()))throw new SQLException("Test epoch changed");}
-        public String confirm(Connection c,AtomicFinanceTransactions.Proof proof,String operation)throws SQLException {verify(proof);if(rejectAfter.getAndSet(false))throw new SQLException("Test confirmation response lost");return proof.mode();}
+        public String confirm(Connection c,AtomicFinanceTransactions.Proof proof,String operation)throws SQLException {verify(proof);if(rejectAfter.getAndSet(false))throw new SQLException("Test confirmation response lost");confirmations.incrementAndGet();return proof.mode();}
     }
-    private static final class Fixture {
+    static final class Fixture {
         final String url="jdbc:h2:mem:atomic_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=10000";
         final Properties config=new Properties();
         final Gate gate=new Gate();
@@ -150,6 +151,12 @@ public class AtomicFinanceTransactionsTest {
         assertTrue(url.contains("allowMultiQueries=false"));assertTrue(url.contains("sslMode=VERIFY_IDENTITY"));assertFalse(url.contains("databaseTerm=SCHEMA"));
         assertTrue(url.contains("connectionTimeZone=UTC"));assertTrue(url.contains("forceConnectionTimeZoneToSession=true"));assertTrue(url.contains("preserveInstants=true"));
         assertFalse(url.contains("serverTimezone="));assertFalse(url.contains("Asia/Shanghai"));assertFalse(url.contains("connectionTimeZone=LOCAL"));assertFalse(url.contains("preserveInstants=false"));
+    }
+
+    @Test public void statementCacheHasBoundedNonOverridableSettings() {
+        String url=AtomicFinanceTransactions.transactionUrl("jdbc:mysql://127.0.0.1:332/IAFM?sslMode=VERIFY_IDENTITY&cachePrepStmts=false&PREPSTMTCACHESIZE=9999&prepStmtCacheSqlLimit=999999&autoReconnect=true");
+        assertTrue(url.contains("cachePrepStmts=true&prepStmtCacheSize=64&prepStmtCacheSqlLimit=4096"));
+        assertFalse(url.contains("cachePrepStmts=false"));assertFalse(url.contains("PREPSTMTCACHESIZE=9999"));assertFalse(url.contains("prepStmtCacheSqlLimit=999999"));assertTrue(url.contains("autoReconnect=false"));assertTrue(url.contains("sslMode=VERIFY_IDENTITY"));
     }
 
     @Test public void cachedResultsCannotBypassIdentityShadowOrOwnedGenerationChecks()throws Exception{

@@ -31,14 +31,23 @@ public class DailyExchangeRateTest {
         java.lang.reflect.Field loaded = ExchangeRate.class.getDeclaredField("cacheLoaded");
         java.lang.reflect.Field attempt = ExchangeRate.class.getDeclaredField("lastAttemptAt");
         java.lang.reflect.Field rates = ExchangeRate.class.getDeclaredField("rates");
+        java.lang.reflect.Field budgets = ExchangeRate.class.getDeclaredField("attempts"); budgets.setAccessible(true);
         loaded.setAccessible(true); attempt.setAccessible(true); rates.setAccessible(true);
         Object oldLoaded = loaded.get(null), oldAttempt = attempt.get(null), oldRates = rates.get(null);
+        java.util.Map<Object,Object> originalBudgets = new java.util.HashMap<>((java.util.Map<?,?>)budgets.get(null));
+        String provider = System.getProperty("iafm.exchangeRate.provider");
         try {
             long now = System.currentTimeMillis();
-            String updated = "2026-10-16T00:00:00Z";
-            String persisted = new JSONObject().put("lastAttemptAt", now).put("conversion_rates", fixture()).put("updatedAt", updated).toString();
+            String asOf = java.time.LocalDate.now(java.time.ZoneOffset.UTC).minusDays(1).toString();
+            String updated = asOf+"T00:00:00Z";
+            JSONObject budget = new JSONObject().put("at", now).put("succeeded", true);
+            String persisted = new JSONObject().put("version",2).put("source","ecb").put("asOf",asOf).put("fetchedAt",java.time.Instant.ofEpochMilli(now).toString())
+                    .put("lastAttemptAt", now).put("attempts",new JSONObject().put("ecb",budget).put("exchangerate-api",budget))
+                    .put("conversion_rates", fixture()).put("updatedAt", updated).toString();
             Files.writeString(cache, persisted);
             System.setProperty("iafm.exchangeRate.cache", cache.toString());
+            System.setProperty("iafm.exchangeRate.provider", "ecb");
+            ((java.util.Map<?,?>)budgets.get(null)).clear();
             loaded.set(null, false); attempt.set(null, 0L);
             ExchangeRate.getExchangeRate();
             ExchangeRate.getExchangeRate();
@@ -49,6 +58,8 @@ public class DailyExchangeRateTest {
             assertEquals(10, ExchangeRate.getAllRates().size());
         } finally {
             loaded.set(null, oldLoaded); attempt.set(null, oldAttempt); rates.set(null, oldRates);
+            ((java.util.Map<Object,Object>)budgets.get(null)).clear(); ((java.util.Map<Object,Object>)budgets.get(null)).putAll(originalBudgets);
+            if(provider==null)System.clearProperty("iafm.exchangeRate.provider");else System.setProperty("iafm.exchangeRate.provider",provider);
             if (property == null) System.clearProperty("iafm.exchangeRate.cache"); else System.setProperty("iafm.exchangeRate.cache", property);
             Files.deleteIfExists(cache);
         }

@@ -58,6 +58,8 @@ public class Login extends HttpServlet {
             }
             ApiSupport.write(response, confirmed.put("status", "success")
                     .put("userGeneration", user.getGeneration()).put("userName", user.getForename() + " " + user.getSurname()).put("userAccount", user.getEmailAddress()));
+        } catch (DatabaseService.FinanceCluster.Busy busy) {
+            ApiSupport.busy(response);
         } catch (Controller.ClusterAvailability.Unavailable failure) {
             response.setStatus(503);
             ApiSupport.write(response,new JSONObject().put("status","failure").put("code","CLUSTER_UNAVAILABLE").put("message",Controller.ClusterAvailability.MESSAGE));

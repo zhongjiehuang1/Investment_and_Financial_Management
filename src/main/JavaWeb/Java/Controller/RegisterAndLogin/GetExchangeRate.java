@@ -16,7 +16,8 @@ public class GetExchangeRate extends HttpServlet {
             if (!Double.isFinite(rate) || rate <= 0) throw new ApiSupport.Failure(503, "Exchange rate is unavailable.");
             return new JSONObject().put("rate", rate).put("fromCurrency", "GBP").put("toCurrency", "CNY")
                     .put("source", Model.Tools.ExchangeRateForVariousCurrencies.getRateSource())
-                    .put("lastUpdatedAt", Model.Tools.ExchangeRateForVariousCurrencies.getLastUpdatedAt());
+                    .put("lastUpdatedAt", Model.Tools.ExchangeRateForVariousCurrencies.getLastUpdatedAt())
+                    .put("reference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
         });
     }
     @Override

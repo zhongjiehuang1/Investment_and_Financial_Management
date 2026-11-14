@@ -16,6 +16,13 @@ import java.util.HexFormat;
 
 /** Common HTTP boundary; each servlet still owns exactly one operation. */
 public final class ApiSupport {
+    public static void busy(HttpServletResponse response) {
+        response.setStatus(429); response.setHeader("Retry-After", "1");
+        write(response, new JSONObject().put("status", "failure").put("code", "SERVER_BUSY")
+            .put("dispatchState", "NOT_STARTED").put("retryAfterSeconds", 1)
+            .put("message", "Server busy. This request was not started; retain the original operation ID."));
+    }
+
     private ApiSupport() { }
 
     @FunctionalInterface
@@ -49,6 +56,24 @@ public final class ApiSupport {
         User requestUser = null;
         try {
             request.setCharacterEncoding("UTF-8");
+            // These two anonymous GETs expose only an immutable, already-loaded
+            // public quote snapshot. They do not own a financial transaction or
+            // a replicated business result. Authenticated API aliases, POSTs and
+            // every other endpoint retain the original transaction boundary.
+            if (publicRead && "GET".equals(request.getMethod())
+                    && java.util.Set.of("/getExchangeRate", "/getExchangeRates").contains(request.getServletPath())) {
+                ClusterAvailability.requireReady();
+                try (Model.Tools.ExchangeRateForVariousCurrencies.RatePin reference =
+                             Model.Tools.ExchangeRateForVariousCurrencies.pinForTransaction()) {
+                    JSONObject result = new JSONObject(action.run(null, input(request)).toString());
+                    ClusterAvailability.requireReady();
+                    result.remove("durability"); result.remove("replicationMode"); result.remove("degraded");
+                    result.put("referenceOnly", true);
+                    if (!result.has("status")) result.put("status", "success");
+                    write(response, result);
+                }
+                return;
+            }
             User user = publicRead && !request.getServletPath().startsWith("/api/")
                     ? null : authenticatedUser(request);
             requestUser = user;
@@ -73,6 +98,8 @@ public final class ApiSupport {
                 afterCommit.run(user,result);
                 write(response, result);
             }
+        } catch (DatabaseService.FinanceCluster.Busy busy) {
+            busy(response);
         } catch (ClusterAvailability.Unavailable unavailable) {
             response.setStatus(503);
             write(response, new JSONObject().put("status", "failure").put("code", "CLUSTER_UNAVAILABLE")
@@ -92,7 +119,7 @@ public final class ApiSupport {
         } catch (Model.Tools.Computing.ExchangeRateUnavailableException unavailable) {
             response.setStatus(503);
             write(response, new JSONObject().put("status", "failure")
-                    .put("message", "Exchange rate is unavailable. Same-currency data remains accessible."));
+                    .put("code", "FX_UNAVAILABLE").put("message", "Exchange rate is unavailable. Same-currency data remains accessible."));
         } catch (IllegalArgumentException | org.json.JSONException | ArithmeticException | java.time.DateTimeException exception) {
             response.setStatus(400);
             write(response, new JSONObject().put("status", "failure")

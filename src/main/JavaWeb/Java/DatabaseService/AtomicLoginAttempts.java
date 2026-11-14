@@ -19,11 +19,13 @@ final class AtomicLoginAttempts {
     AtomicLoginAttempts(Clock clock,Authentication authentication){this.clock=clock;this.authentication=authentication;}
 
     static void verifySchema(Connection database)throws SQLException{
-        for(String sql:new String[]{
-                "SELECT CLIENT_HASH,WINDOW_START_MS,ATTEMPTS FROM LOGIN_LIMITS WHERE 1=0",
-                "SELECT OPERATION_ID,CLIENT_HASH,EMAIL_HASH,REQUEST_HASH,HTTP_STATUS,USER_ID,USER_GENERATION,CREATED_AT_MS FROM LOGIN_ATTEMPTS WHERE 1=0",
-                "SELECT CLIENT_HASH,WINDOW_START_MS,ATTEMPTS FROM LOGIN_STATUS_LIMITS WHERE 1=0"})
-            try(Statement query=database.createStatement()){query.executeQuery(sql).close();}
+        // A single no-row query still resolves every required column and privilege,
+        // without three serial cross-cloud round trips.
+        String sql="SELECT A.*,B.*,C.* FROM "
+                +"(SELECT CLIENT_HASH,WINDOW_START_MS,ATTEMPTS FROM LOGIN_LIMITS WHERE 1=0) A CROSS JOIN "
+                +"(SELECT OPERATION_ID,CLIENT_HASH,EMAIL_HASH,REQUEST_HASH,HTTP_STATUS,USER_ID,USER_GENERATION,CREATED_AT_MS FROM LOGIN_ATTEMPTS WHERE 1=0) B CROSS JOIN "
+                +"(SELECT CLIENT_HASH,WINDOW_START_MS,ATTEMPTS FROM LOGIN_STATUS_LIMITS WHERE 1=0) C";
+        try(Statement query=database.createStatement()){query.executeQuery(sql).close();}
     }
 
     Outcome login(Connection database,String operation,String client,String emailHash,String payloadHash,String email,String password)throws SQLException{

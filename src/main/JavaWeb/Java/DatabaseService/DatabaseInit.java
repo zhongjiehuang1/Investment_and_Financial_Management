@@ -69,8 +69,9 @@ public class DatabaseInit implements ServletContextListener {
         java.util.Properties cluster=FinanceCluster.enabled()?clusterConfiguration():null;
         boolean replicated=cluster!=null&&replicatedDecisionStore(cluster);
         if(cluster!=null&&!replicated)FinanceCluster.requireLegacyIsolation(cluster);
-        String authority=replicated?Controller.ClusterAvailability.recoveryAuthorityIdentity():null;
-        if (replicated && authority==null) throw new IllegalStateException("Replicated recovery authority is unavailable.");
+        boolean single=replicated && AtomicFinanceTransactions.singleDatabase(cluster);
+        String authority=replicated && !single?Controller.ClusterAvailability.recoveryAuthorityIdentity():null;
+        if (replicated && !single && authority==null) throw new IllegalStateException("Replicated recovery authority is unavailable.");
         new RegisterDriver().registerDriver();
         if (replicated) {
             initializeReplicated(event,cluster,authority);
@@ -122,7 +123,9 @@ public class DatabaseInit implements ServletContextListener {
             throw new IllegalStateException("Replicated startup requires separately applied migrations.");
         if(AtomicFinanceTransactions.enabled(properties)) {
             try {
-                new AtomicFinanceTransactions(properties).initialize();
+                AtomicFinanceTransactions startup=new AtomicFinanceTransactions(properties);
+                startup.warmStartup();
+                startup.initialize();
                 event.getServletContext().log("IAFM atomic schema/ID verification completed with private durability confirmation.");
             } catch(Exception failure) {
                 throw new IllegalStateException("Atomic schema verification or ID repair failed.",failure);
