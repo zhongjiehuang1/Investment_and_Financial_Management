@@ -22,17 +22,27 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
         ConversionSnapshot pinned = PINNED.get();
         return pinned == null ? ExchangeRate.captureSnapshot() : pinned.provider();
     }
+    public static org.json.JSONObject discloseSource(org.json.JSONObject result, String source) {
+        if ("ecb".equals(source)) {
+            result.put("sourceName", "European Central Bank (ECB)")
+                    .put("sourceUrl", "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html")
+                    .put("sourceFreeOfCharge", true).put("modified", true)
+                    .put("modification", "Rates are calculated from ECB euro reference rates, converted to other currency bases or pairs, and values may be rounded.");
+        }
+        return result;
+    }
     public static org.json.JSONObject referenceMetadata() {
         RateSnapshot legacy = getSnapshot(); ExchangeRate.DailySnapshot provider = getProviderSnapshot();
         boolean manual = "manual".equals(legacy.source());
         String asOf = provider.asOf(), fetched = provider.fetchedAt();
         if (manual) { asOf = null; fetched = null; } // A configured value has no claimed provider reference date.
         boolean stale = asOf != null && java.time.LocalDate.parse(asOf).isBefore(java.time.LocalDate.now(java.time.ZoneOffset.UTC).minusDays(2));
-        return new org.json.JSONObject().put("source", manual ? "manual" : provider.source())
+        String source = manual ? "manual" : provider.source();
+        return discloseSource(new org.json.JSONObject().put("source", source)
                 .put("asOf", asOf == null ? org.json.JSONObject.NULL : asOf)
                 .put("fetchedAt", fetched == null ? org.json.JSONObject.NULL : fetched)
                 .put("referenceSha256", provider.sha256() == null || manual ? org.json.JSONObject.NULL : provider.sha256())
-                .put("referenceOnly", true).put("stale", stale);
+                .put("referenceOnly", true).put("stale", stale), source);
     }
     public static RateSnapshot getSnapshot() { ConversionSnapshot pinned = PINNED.get(); return pinned == null ? rates : pinned.legacy; }
 
@@ -85,7 +95,7 @@ public class ExchangeRateForVariousCurrencies extends TimerTask implements Servl
     @Override
     public void contextInitialized(ServletContextEvent event) {
         timer = new java.util.Timer("investment-exchange-rates", true);
-        // An hourly due check uses the persisted 24-hour gate; it never fetches per visitor.
+        // An hourly timer checks the persisted per-provider fetch budget; visits do not trigger fetches.
         timer.schedule(new ExchangeRateForVariousCurrencies(), 0, 3600000);
     }
 

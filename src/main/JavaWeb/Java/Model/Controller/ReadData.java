@@ -58,16 +58,20 @@ public final class ReadData {
         return DatabaseService.Model.Controller.ReadData.platformsPage(user.getId(), page(input), size(input), query(input));
     }
     public static JSONObject assetSummary(User user, JSONObject input) throws SQLException {
-        return DatabaseService.Model.Controller.ReadData.assetSummary(user.getId(), currency(user, input));
+        return DatabaseService.Model.Controller.ReadData.assetSummary(user.getId(), currency(user, input))
+                .put("exchangeReference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
     }
     public static JSONObject cashflowSummary(User user, JSONObject input) throws SQLException {
-        return DatabaseService.Model.Controller.ReadData.cashflowSummary(user.getId(), currency(user, input), filters(input));
+        return DatabaseService.Model.Controller.ReadData.cashflowSummary(user.getId(), currency(user, input), filters(input))
+                .put("exchangeReference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
     }
     public static JSONObject earningsSummary(User user, JSONObject input) throws SQLException {
-        return DatabaseService.Model.Controller.ReadData.earningsSummary(user.getId(), currency(user, input));
+        return DatabaseService.Model.Controller.ReadData.earningsSummary(user.getId(), currency(user, input))
+                .put("exchangeReference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
     }
     public static JSONObject riskSummary(User user, JSONObject input) throws SQLException {
-        return DatabaseService.Model.Controller.ReadData.riskSummary(user.getId(), currency(user, input));
+        return DatabaseService.Model.Controller.ReadData.riskSummary(user.getId(), currency(user, input))
+                .put("exchangeReference", Model.Tools.ExchangeRateForVariousCurrencies.referenceMetadata());
     }
     public static JSONObject profile(User user, JSONObject input) throws SQLException {
         return DatabaseService.Model.Controller.ReadData.profile(user.getId());

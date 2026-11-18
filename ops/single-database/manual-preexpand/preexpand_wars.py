@@ -1,7 +1,7 @@
 """Verified, stopped-Tomcat WAR pre-expansion. Default action has no side effects."""
 import argparse,grp,hashlib,json,os,pathlib,re,stat,subprocess,sys,uuid,xml.etree.ElementTree as ET,zipfile
 P=pathlib.Path
-NAMES={'ROOT.war','Investment_and_Financial_Management.war','starhub.war','ucost.war'}
+NAMES={'ROOT.war','Investment_and_Financial_Management.war','starhub.war','ucost.war','atlas.war'}
 BASE=P('/var/lib/codex-validation/tomcat-atomic');WEB=BASE/'webapps';SERVER=BASE/'conf/server.xml';BACK=P('/var/lib/codex-validation/preexpanded-war-preimages')
 MAX_ENTRY=256*1024*1024;MAX_TOTAL=2*1024*1024*1024;MAX_ENTRIES=20000
 class Refusal(Exception):pass
@@ -77,7 +77,7 @@ def xml_change(raw):
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('--execute',action='store_true');ap.add_argument('--run',type=uuid.UUID);ap.add_argument('--manifest');ap.add_argument('--manifest-sha256');a=ap.parse_args()
  if not a.execute:
-  print(json.dumps({'mode':'LOCAL_PLAN_ONLY','remoteOrFilesystemChanges':False,'requires':'Tomcat stopped; four reviewed WAR hashes and private manifest; exact tree verification','keepsWarsAndOldExpandedTrees':True}));return
+  print(json.dumps({'mode':'LOCAL_PLAN_ONLY','remoteOrFilesystemChanges':False,'requires':'Tomcat stopped; five reviewed WAR hashes and private manifest; exact tree verification','keepsWarsAndOldExpandedTrees':True}));return
  need(os.geteuid()==0 and a.run is not None and a.manifest and re.fullmatch(r'[0-9a-f]{64}',a.manifest_sha256 or ''));stopped();run=str(a.run);gid=grp.getgrnam('tomcat').gr_gid
  for p in (BASE.parent,BASE,WEB,SERVER.parent):safedir(p)
  mf=P(a.manifest);ms=regular(mf);need(stat.S_IMODE(ms.st_mode)==0o600 and sha(mf)==a.manifest_sha256);manifest=json.loads(mf.read_bytes());need(set(manifest)=={'wars'} and set(manifest['wars'])==NAMES and all(re.fullmatch(r'[0-9a-f]{64}',h) for h in manifest['wars'].values()))

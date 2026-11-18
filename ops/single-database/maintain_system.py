@@ -2,7 +2,7 @@
 """Two-node maintenance: default offline plan. No failover or database cleanup."""
 import argparse,datetime,hashlib,json,os,pathlib,re,signal,stat,subprocess,sys,time,uuid
 P=pathlib.Path;D=P(__file__).resolve().parent;REMOTE=D/'maintenance_remote.py'
-HOME=P.home();ROOT=HOME/'Documents/Server_Recovery_Work/Single_Database_Maintenance'
+HOME=P.home();ROOT=HOME/'Library/Application Support/ServerRecovery/Private/Work/Single_Database_Maintenance'
 S1=['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=10','root@8.211.120.109']
 S2=['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=10','-i',str(HOME/'Documents/SSH/LightsailDefaultKey-eu-west-2.pem'),'ubuntu@13.42.147.134']
 def interrupted(*_):raise InterruptedError('maintenance interrupted')

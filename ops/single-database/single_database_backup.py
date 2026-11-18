@@ -1,16 +1,16 @@
 """Single-server encrypted backup; without --execute no files or network are touched."""
-import argparse,base64,datetime,gzip,hashlib,json,os,pathlib,shlex,stat,subprocess,sys,threading,uuid
+import argparse,base64,datetime,gzip,hashlib,json,os,pathlib,shlex,stat,subprocess,sys,tarfile,threading,uuid
 P=pathlib.Path;HERE=P(__file__).resolve().parent
 REMOTE=HERE/'remote_backup.py';ENV=HERE/'recovery_envelope.cjs';CAPTURE=HERE/'capture_config.py';VERIFY=HERE/'archive_verify.py';SCHEMA=HERE/'schema_fingerprint.py'
 REMOTE_SHA='107decfa039638dbacdd02485337536464ecb03c3d8b89783cf852c6e1f4cffe'
 SCHEMA_SHA='5791644716552b00ea582186e4b0fb6107fc31e93634c4a2251954748b2e5c21'
-CAPTURE_SHA='f998d4ca8ba4926c734d8d23bc8ccd4c4ab995f2ef168c05972ba4bbd4a6a415'
+CAPTURE_SHA='e36ff56a733603026f4ffe4eaa684c657679998c8e0efc64a01d545ac84ec0d9'
 VERIFY_SHA='8bbce637013e5e6d96f6687b092ea96b463bec1becc6da4be87f483b249c4729'
 ENV_SHA='5e22f75a7dab7b366ad34a8bab9e52ea19e27da49c9f05952b0e1aae0c315f7d'
 NODE=P('/Users/zhongjiehuang/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node')
 KEYS=[P('/Users/zhongjiehuang/Documents/Server_Recovery_Keys/Primary/archive-master.key'),P('/Users/zhongjiehuang/Documents/Server_Recovery_Keys/Secondary/archive-master.key')]
-BACKUPS=P('/Users/zhongjiehuang/Library/CloudStorage/OneDrive-Personal/Zhongjie_Huang_s_Database')/('Databases_Backup_'+datetime.date.today().isoformat())
-PRIVATE=P('/Users/zhongjiehuang/Documents/Server_Recovery_Work/Single_Database_Backup');S2=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','-i','/Users/zhongjiehuang/Documents/SSH/LightsailDefaultKey-eu-west-2.pem','ubuntu@13.42.147.134'];S1=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','root@8.211.120.109']
+BACKUPS=P.home()/'Library/CloudStorage/OneDrive-Personal/Zhongjie_Huang_s_Database/Historical_Archives/Database_Backups'
+PRIVATE=P.home()/'Library/Application Support/ServerRecovery/Private/Work/Single_Database_Backup';S2=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','-i','/Users/zhongjiehuang/Documents/SSH/LightsailDefaultKey-eu-west-2.pem','ubuntu@13.42.147.134'];S1=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','root@8.211.120.109']
 def need(v):
  if not v:raise RuntimeError('backup precondition refused')
 def digest(p):
@@ -70,8 +70,8 @@ if not a.execute:
  print(json.dumps({'mode':'LOCAL_PLAN_ONLY','networkCalls':0,'filesChanged':False,'backup':'Server 2 logical SQL and accounts plus independently verified encrypted configuration from both hosts','requires':'both app writers stopped, server1 mysql masked, stable GTID and same schema inventory; unique --run and --writers-stopped','restoreTest':'not included'}));raise SystemExit
 try:
  need(a.run is not None and a.writers_stopped and digest(ENV)==ENV_SHA and digest(REMOTE)==REMOTE_SHA and digest(CAPTURE)==CAPTURE_SHA and digest(VERIFY)==VERIFY_SHA and digest(SCHEMA)==SCHEMA_SHA);NODE=P(a.node_binary) if a.node_binary else NODE;need(NODE.is_file() and os.access(NODE,os.X_OK));import archive_verify
- if a.key_custody_file:
-  privatefile(a.key_custody_file);need(a.key_custody_file.stat().st_size<=65536);custody=json.loads(a.key_custody_file.read_bytes());KEYS=[P(custody['primaryPath']),P(custody['secondaryPath'])];need(all(k.is_absolute() for k in KEYS))
+ custody_path=a.key_custody_file or (P.home()/'Library/Application Support/ServerRecovery/Private/recovery-key-custody.json')
+ privatefile(custody_path);need(custody_path.stat().st_size<=65536);custody=json.loads(custody_path.read_bytes());KEYS=[P(custody['primaryPath']),P(custody['secondaryPath'])];need(all(k.is_absolute() for k in KEYS))
  if a.server1_control_socket:S1[1:1]=['-S',a.server1_control_socket]
  need(BACKUPS.parent.is_dir() and PRIVATE.parent.parent.is_dir());PRIVATE.parent.mkdir(mode=0o700,exist_ok=True);PRIVATE.mkdir(mode=0o700,exist_ok=True)
  for p in (PRIVATE.parent,PRIVATE):
@@ -79,7 +79,7 @@ try:
  BACKUPS.mkdir(mode=0o700,exist_ok=True);need(BACKUPS.is_dir() and not BACKUPS.is_symlink());need(len(set(k.resolve(strict=True) for k in KEYS))==2)
  for k in KEYS:privatefile(k);need(k.stat().st_size==32 and 'onedrive' not in str(k.resolve()).lower())
  run=str(a.run);lock=PRIVATE/'single-database-backup-exclusive.lock';lock.mkdir(mode=0o700);folder=PRIVATE/('single-database-backup-'+run);folder.mkdir(mode=0o700);privatewrite(lock/'owner.json',{'runId':run,'unknownMustNotReplay':True});privatewrite(folder/'intent.json',{'runId':run,'status':'INTENT','unknownMustNotReplay':True,'expectedMysqlUuid':'5b042440-ddee-11f1-8a71-06ffe4b75559'})
- start=datetime.datetime.now(datetime.timezone.utc);dest=BACKUPS/'Current_Production_Database';dest.mkdir(mode=0o700)
+ start=datetime.datetime.now(datetime.timezone.utc);dest=BACKUPS/('backup-'+run);dest.mkdir(mode=0o700)
  pre1=s1_proof();pre=json.loads(ssh_remote('proof'));need(pre['inventory']['baseTableCount']>0);privatewrite(folder/'before.json',{'server1':pre1,'server2':pre})
  content_before=json.loads(ssh_remote('content-digest'));need(content_before['identity']==pre['identity'] and content_before['inventory']==pre['inventory']);metadata=ssh_remote('metadata');privatewrite(folder/'accounts-and-grants.json',metadata);m=json.loads(metadata);need(m['identity']==pre['identity'] and m['inventory']==pre['inventory'])
  dump=folder/'All_Databases.sql.gz';fd=os.open(dump,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
@@ -93,12 +93,15 @@ try:
  for node in (1,2):
   archive=folder/('Server_'+str(node)+'_Configuration.tar.gz');fd=os.open(archive,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
   with os.fdopen(fd,'wb') as f:capture_config(node,f);f.flush();os.fsync(f.fileno())
-  verified=archive_verify.verify(archive,node);need(verified['allArchivedHashesVerified']);configuration.append((node,archive,verified))
+  verified=archive_verify.verify(archive,node);need(verified['allArchivedHashesVerified'])
+  if 'atlas' in pre['inventory']['schemas']:
+   with tarfile.open(archive,'r:gz') as contents:need({'var/lib/codex-validation/app-config/atlas.properties','etc/atlas/entry.conf','etc/letsencrypt/renewal/atlas.zhongjiehuang.com.conf'}.issubset(contents.getnames()))
+  configuration.append((node,archive,verified))
  content_after=json.loads(ssh_remote('content-digest'));after=json.loads(ssh_remote('proof'));post1=s1_proof();need(after==pre and post1==pre1 and content_after==content_before);privatewrite(folder/'after.json',{'server1':post1,'server2':after})
  items=[seal(dump,dest/'All_Databases.sql.gz.GCM'),seal(folder/'accounts-and-grants.json',dest/'Database_Accounts_and_Grants.json.GCM')]
  for node,archive,verified in configuration:
   item=seal(archive,dest/('Server_'+str(node)+'_Configuration.tar.gz.GCM'));item['configurationArchiveVerification']=verified;items.append(item)
- result={'format':'single-server-database-backup-v1','runId':run,'createdAtUtc':start.isoformat(),'sourceServer':2,'mysqlUuid':pre['identity']['uuid'],'mysqlPort':332,'sourceMysqlVersion':pre['identity']['version'],'schemas':pre['inventory']['schemas'],'baseTableCount':pre['inventory']['baseTableCount'],'viewCount':pre['inventory']['viewCount'],'tableStorage':'InnoDB','gtidStableDuringQuiescentBackup':True,'applicationsStoppedOnBothHosts':True,'files':items,'sqlAndStarFileBlobContentIncluded':True,'databaseConfigurationIsReferenceNotAutomaticFreshHostInstall':True,'accountsGrantsEncrypted':True,'configurationFromBothServers':True,'configurationCapturePerFileStableNotAtomicAcrossHosts':True,'sourceContentDigestAlgorithm':content_before['algorithm'],'sourceContentSha256':content_before['sha256'],'sourceSchemaDigestAlgorithm':content_before['schemaAlgorithm'],'sourceSchemaSha256':content_before['schemaSha256'],'sourceRawSchemaSha256':content_before['rawSchemaSha256'],'sourceColumnMetadataAlgorithm':content_before['columnAlgorithm'],'sourceColumnMetadataSha256':content_before['columnSha256'],'sourceColumnCount':content_before['columnCount'],'sourceContentDigestBeforeAndAfterDumpMatch':True,'restorePerformedForThisBackup':False,'caveat':'Prior independent source restore tests do not prove restore of this backup.'}
+ result={'format':'single-server-database-backup-v1','runId':run,'createdAtUtc':start.isoformat(),'sourceServer':2,'mysqlUuid':pre['identity']['uuid'],'mysqlPort':332,'sourceMysqlVersion':pre['identity']['version'],'schemas':pre['inventory']['schemas'],'baseTableCount':pre['inventory']['baseTableCount'],'viewCount':pre['inventory']['viewCount'],'tableStorage':'InnoDB','gtidStableDuringQuiescentBackup':True,'applicationsStoppedOnBothHosts':True,'files':items,'sqlAndStarFileBlobContentIncluded':True,'databaseConfigurationIsReferenceNotAutomaticFreshHostInstall':True,'accountsGrantsEncrypted':True,'configurationFromBothServers':True,'atlasConfigurationRequiredAndCaptured':('atlas' in pre['inventory']['schemas']),'configurationCapturePerFileStableNotAtomicAcrossHosts':True,'sourceContentDigestAlgorithm':content_before['algorithm'],'sourceContentSha256':content_before['sha256'],'sourceSchemaDigestAlgorithm':content_before['schemaAlgorithm'],'sourceSchemaSha256':content_before['schemaSha256'],'sourceRawSchemaSha256':content_before['rawSchemaSha256'],'sourceColumnMetadataAlgorithm':content_before['columnAlgorithm'],'sourceColumnMetadataSha256':content_before['columnSha256'],'sourceColumnCount':content_before['columnCount'],'sourceContentDigestBeforeAndAfterDumpMatch':True,'restorePerformedForThisBackup':False,'caveat':'Prior independent source restore tests do not prove restore of this backup.'}
  privatewrite(dest/'MANIFEST.json',result);privatewrite(folder/'completion.json',result)
  for file in (dump,folder/'accounts-and-grants.json',*(v[1] for v in configuration)):privatefile(file);file.unlink()
  (lock/'owner.json').unlink();lock.rmdir();print(json.dumps({'status':'COMPLETE','destination':str(dest),'manifestSha256':digest(dest/'MANIFEST.json'),'restorePerformedForThisBackup':False}))

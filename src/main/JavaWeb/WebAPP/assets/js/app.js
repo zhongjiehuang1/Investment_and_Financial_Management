@@ -37,6 +37,7 @@
         privacy: remembered(STORE.privacy) === 'true',
         user: {
             name: sessionStorage.getItem('userName') || '',
+            nameZh: sessionStorage.getItem('userNameZh'),
             account: sessionStorage.getItem('userAccount') || '',
             generation: sessionStorage.getItem('userGeneration') || ''
         },
@@ -351,7 +352,8 @@
             editInflationRate: 'Edit inflation rate',
             selectedCurrency: 'Selected currency',
             registrationClosed: 'Public registration is unavailable',
-            registrationClosedDesc: 'Finance Workspace does not currently support self-service registration. Access is provided manually for this personal, non-commercial learning project. To request access, contact the developer:',
+            registrationClosedDesc: 'Finance Workspace does not currently support self-service registration. Access is provided manually for this personal, non-commercial learning project. To request access, visit the developer’s contact page.',
+            registrationContact: 'Visit the contact page →',
             privacyPolicy: 'Privacy Policy',
             privacyPolicyDesc: 'Read how Finance Workspace handles personal data under UK and European data protection law.',
             january: 'January',
@@ -667,7 +669,8 @@
             editInflationRate: '编辑通胀率',
             selectedCurrency: '当前货币',
             registrationClosed: '公众注册暂未开放',
-            registrationClosedDesc: 'Finance Workspace 目前不支持主动、自助注册。本系统为个人、非商业学习项目，访问权限由开发者人工提供。如有兴趣，请通过以下任一邮箱联系开发者：',
+            registrationClosedDesc: 'Finance Workspace 目前不支持主动、自助注册。本系统为个人、非商业学习项目，访问权限由开发者人工提供。如需申请访问，请前往开发者的联系页面。',
+            registrationContact: '前往个人简介的联系页面 →',
             privacyPolicy: '隐私政策',
             privacyPolicyDesc: '查看 Finance Workspace 如何依据英国及欧洲数据保护法规处理个人数据。',
             january: '一月',
@@ -740,6 +743,11 @@
         }).format(d);
     };
     const initials = name => (name || 'FS').split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+    function displayUserName() {
+        return state.lang === 'zh' && state.user.nameZh ? state.user.nameZh : state.user.name || '';
+    }
+    const userAvatar = name => state.lang === 'zh' && state.user.nameZh ? Array.from(name).slice(-2).join('') : initials(name);
+    const userGreetingName = name => state.lang === 'zh' && state.user.nameZh ? name : name.split(' ')[0];
     const icon = (name, cls = '') => {
         const paths = {
             overview: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
@@ -940,8 +948,30 @@
         }
     }
 
+    let localizedUserNameRequest = null;
+    function loadLocalizedUserName() {
+        if (state.lang !== 'zh' || !isAuthed() || state.user.nameZh !== null) return;
+        const sessionVersion = state.sessionVersion, generation = state.user.generation;
+        if (localizedUserNameRequest?.sessionVersion === sessionVersion) return;
+        const request = {sessionVersion};
+        localizedUserNameRequest = request;
+        apiRequest('/getUserProfile', {timeout: 5000}).then(profile => {
+            if (state.sessionVersion !== sessionVersion || state.user.generation !== generation
+                    || typeof profile.displayNameZh !== 'string') return;
+            state.user.nameZh = profile.displayNameZh;
+            try { sessionStorage.setItem('userNameZh', state.user.nameZh); } catch (_) { /* Keep the current tab usable. */ }
+            const name = displayUserName();
+            $$('[data-user-name]').forEach(element => { element.textContent = name || t('account'); });
+            $$('[data-user-avatar]').forEach(element => { element.textContent = userAvatar(name); });
+            $$('[data-user-greeting]').forEach(element => { element.textContent = userGreetingName(name) || t('account'); });
+        }).catch(() => { /* Keep the original name when profile data is unavailable. */ }).finally(() => {
+            if (localizedUserNameRequest === request) localizedUserNameRequest = null;
+        });
+    }
+
     function clearSession() {
         sessionStorage.removeItem('userName');
+        sessionStorage.removeItem('userNameZh');
         sessionStorage.removeItem('userAccount');
         sessionStorage.removeItem('userGeneration');
         state.sessionVersion++;
@@ -1027,6 +1057,7 @@
         if (isAuthed()) {
             bindShell();
             renderPage();
+            loadLocalizedUserName();
         } else bindAuth();
         renderCookieControls();
     }
@@ -1064,10 +1095,7 @@
             <strong>${icon('info')}${t('registrationClosed')}</strong>
             <p>${t('registrationClosedDesc')}</p>
             <div class="registration-contacts">
-              <a href="mailto:zhjpersonal83@gmail.com">zhjpersonal83@gmail.com</a>
-              <a href="mailto:zhongjiehuang197@gmail.com">zhongjiehuang197@gmail.com</a>
-              <a href="mailto:zhjpersonal@outlook.com">zhjpersonal@outlook.com</a>
-              <a href="mailto:2669631586@qq.com">2669631586@qq.com</a>
+              <a href="https://www.zhongjiehuang.com/${state.lang === 'zh' ? 'zh/contact/' : 'contact/'}">${t('registrationContact')}</a>
             </div>
           </div>
           <div class="auth-note">${icon('shield')}<span>${t('privacyNote')} <a href="${API_BASE}/privacy-policy.html">${t('privacyPolicy')}</a>.</span></div>
@@ -1088,6 +1116,8 @@
 
     function renderShell() {
         const [titleKey, subKey] = pageMeta(state.page);
+        const name = displayUserName();
+        const avatar = userAvatar(name);
         return `<div class="app-shell">
       ${!navigator.onLine ? `<div class="offline-banner">${t('offline')}</div>` : ''}
       <aside class="sidebar ${state.sidebarOpen ? 'open' : ''}" id="sidebar">
@@ -1113,7 +1143,7 @@
             <button class="icon-btn desktop-only" id="themeToggle" aria-label="${t('theme')}">${icon(state.theme === 'dark' ? 'sun' : 'moon')}</button>
             <button type="button" class="language-switch" id="languageToggle" aria-label="${languageSwitchAria()}">${languageSwitchLabel()}</button>
             <button class="icon-btn" id="notificationToggle" aria-label="${t('notifications')}">${icon('bell')}<span class="badge-count">${notificationCount()}</span></button>
-            <button class="user-chip" id="userMenu"><span class="user-avatar">${esc(initials(state.user.name))}</span><span class="user-meta"><strong>${esc(state.user.name || t('account'))}</strong><span data-sensitive="true">${esc(state.user.account)}</span></span>${icon('chevron')}</button>
+            <button class="user-chip" id="userMenu"><span class="user-avatar" data-user-avatar>${esc(avatar)}</span><span class="user-meta"><strong data-user-name>${esc(name || t('account'))}</strong><span data-sensitive="true">${esc(state.user.account)}</span></span>${icon('chevron')}</button>
           </div>
         </header>
         <main class="content" id="mainContent"></main>
@@ -1174,7 +1204,7 @@
                 sessionStorage.setItem('userName', name);
                 sessionStorage.setItem('userAccount', account);
                 sessionStorage.setItem('userGeneration', data.userGeneration);
-                state.user = {name, account, generation: data.userGeneration};
+                state.user = {name, nameZh: null, account, generation: data.userGeneration};
                 location.hash = '#/overview';
                 render();
             } else throw new Error(data.message || t('error'));
@@ -1274,7 +1304,7 @@
         const r = anchor.getBoundingClientRect();
         const el = document.createElement('div');
         el.className = 'dropdown';
-        el.innerHTML = `<div class="dropdown-head"><strong>${esc(state.user.name || t('account'))}</strong><p data-sensitive="true">${esc(state.user.account)}</p></div><button data-menu-settings>${icon('settings')}${t('settings')}</button><button data-menu-privacy>${icon(state.privacy ? 'eye' : 'eyeOff')}${state.privacy ? t('showBalances') : t('hideBalances')}</button><button class="danger" data-menu-logout>${icon('logout')}${t('logout')}</button>`;
+        el.innerHTML = `<div class="dropdown-head"><strong data-user-name>${esc(displayUserName() || t('account'))}</strong><p data-sensitive="true">${esc(state.user.account)}</p></div><button data-menu-settings>${icon('settings')}${t('settings')}</button><button data-menu-privacy>${icon(state.privacy ? 'eye' : 'eyeOff')}${state.privacy ? t('showBalances') : t('hideBalances')}</button><button class="danger" data-menu-logout>${icon('logout')}${t('logout')}</button>`;
         document.body.appendChild(el);
         positionDropdown(el, r);
         state.dropdown = el;
@@ -1557,8 +1587,10 @@
         const zh = state.lang === 'zh';
         const source = fx.source === 'ecb' ? (zh ? '欧洲中央银行（ECB）' : 'European Central Bank (ECB)') : fx.source === 'manual' ? (zh ? '手动配置参考值' : 'Manually configured reference') : 'ExchangeRate-API';
         const date = /^\d{4}-\d{2}-\d{2}$/.test(fx.asOf || '') ? fx.asOf : (zh ? '未提供参考日期' : 'Reference date not supplied');
-        const note = zh ? '每日参考值，并非实时交易报价' : 'Daily reference values, not live trading quotes';
-        return `<p class="card-subtitle">${esc(source)} · ${esc(date)} · ${note}${fx.stale ? (zh ? ' · 较早参考日期' : ' · Earlier reference date') : ''}</p>`;
+        const note = zh ? '每日参考值，仅供参考，不用于实际交易' : 'Daily reference values for information only, not for transactions';
+        const sourceLabel = fx.source === 'ecb' ? `<a href="https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html" target="_blank" rel="noopener noreferrer">${esc(source)}</a>` : esc(source);
+        const derived = fx.source === 'ecb' ? (zh ? ' · 跨币种数值根据欧元参考汇率换算，数值可能经过四舍五入' : ' · Calculated from euro reference rates for cross-currency amounts; values may be rounded') : '';
+        return `<p class="card-subtitle">${sourceLabel} · ${esc(date)} · ${note}${derived}${fx.stale ? (zh ? ' · 较早参考日期' : ' · Earlier reference date') : ''}</p>`;
     }
 
     function renderOverview() {
@@ -1566,8 +1598,10 @@
         const goals = getGoals();
         const tx = state.recentTransactions || [];
         const notes = buildInsights();
+        const name = displayUserName();
+        const greetingName = userGreetingName(name);
         return `<div>
-      <section class="hero-card"><div class="eyebrow">${greeting()}, ${esc((state.user.name || '').split(' ')[0] || t('account'))}</div><h2>${t('financialOverview')}</h2><p>${t('reportDesc')}</p>${renderExchangeReference(state.report)}<div class="hero-meta"><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${s.assetCount}</strong></div><div class="hero-stat"><small>${t('selectedCurrency')}</small><strong>${esc(s.currency)}</strong></div><div class="hero-stat"><small>${t('refreshed')}</small><strong>${new Intl.DateTimeFormat(state.lang === 'zh' ? 'zh-CN' : 'en-GB', {
+      <section class="hero-card"><div class="eyebrow">${greeting()}, <span data-user-greeting>${esc(greetingName || t('account'))}</span></div><h2>${t('financialOverview')}</h2><p>${t('reportDesc')}</p>${renderExchangeReference(state.report)}<div class="hero-meta"><div class="hero-stat"><small>${t('totalAssets')}</small><strong>${s.assetCount}</strong></div><div class="hero-stat"><small>${t('selectedCurrency')}</small><strong>${esc(s.currency)}</strong></div><div class="hero-stat"><small>${t('refreshed')}</small><strong>${new Intl.DateTimeFormat(state.lang === 'zh' ? 'zh-CN' : 'en-GB', {
             hour: '2-digit',
             minute: '2-digit'
         }).format(new Date())}</strong></div></div></section>
@@ -1672,7 +1706,7 @@
         const filtered = Boolean(state.assetSearch || state.riskFilter !== 'all');
         return `<div>
           <div class="page-actions"><div class="page-actions-left"><div class="segmented"><button class="${state.assetTab === 'investment' ? 'active' : ''}" data-asset-tab="investment">${t('investmentAssets')} <span class="chip">${num(summary.investmentCount)}</span></button><button class="${state.assetTab === 'nonInvestment' ? 'active' : ''}" data-asset-tab="nonInvestment">${t('nonInvestmentAssets')} <span class="chip">${num(summary.cashCount)}</span></button></div></div><div class="page-actions-right"><button class="btn btn-secondary" id="refreshAssets">${icon('refresh')}${t('refresh')}</button><button class="btn btn-primary" id="addAssetButton">${icon('plus')}${t(state.assetTab === 'investment' ? 'addInvestment' : 'addCashAsset')}</button></div></div>
-          <div class="summary-strip"><div class="summary-item"><small>${t('totalNetWorth')}</small><strong class="money" data-sensitive="true">${money(summary.netWorth, currency)}</strong></div><div class="summary-item"><small>${t('investmentEarnings')}</small><strong class="${isNegativeMoney(summary.investmentEarnings) ? 'amount-negative' : 'amount-positive'} money" data-sensitive="true">${money(summary.investmentEarnings, currency)}</strong></div><div class="summary-item"><small>${t('fees')}</small><strong class="money" data-sensitive="true">${money(summary.fees, currency)}</strong></div></div>
+          <div class="summary-strip"><div class="summary-item"><small>${t('totalNetWorth')}</small><strong class="money" data-sensitive="true">${money(summary.netWorth, currency)}</strong></div><div class="summary-item"><small>${t('investmentEarnings')}</small><strong class="${isNegativeMoney(summary.investmentEarnings) ? 'amount-negative' : 'amount-positive'} money" data-sensitive="true">${money(summary.investmentEarnings, currency)}</strong></div><div class="summary-item"><small>${t('fees')}</small><strong class="money" data-sensitive="true">${money(summary.fees, currency)}</strong></div></div>${renderExchangeReference(summary)}
           <div class="page-actions"><div class="page-actions-left"><div class="search-box">${icon('search')}<input class="input" id="assetSearch" value="${attr(state.assetSearch)}" placeholder="${attr(t('searchAssets'))}"></div><select class="select filter-select" id="assetRiskFilter"><option value="all">${t('allRisk')}</option>${(data?.riskTypes || DEFAULTS.riskTypes).map(risk => `<option value="${attr(risk)}" ${state.riskFilter === risk ? 'selected' : ''}>${esc(translateType(risk))}</option>`).join('')}</select></div></div>
           <section class="card table-card">${rows.length ? renderAssetTable(rows, state.assetTab) : renderEmpty(t(filtered ? 'noMatching' : 'noData'), t(filtered ? 'noMatchingDesc' : 'noDataDesc'))}${pagination(data, 'assets')}</section>
         </div>`;
@@ -1804,7 +1838,7 @@
         return `<div>
           <div class="segmented ledger-tabs" aria-label="${t('transactions')}"><button class="${transfers ? '' : 'active'}" data-tx-section="cashflow" aria-pressed="${!transfers}">${t('cashflowEntries')}</button><button class="${transfers ? 'active' : ''}" data-tx-section="transfers" aria-pressed="${transfers}">${t('internalTransfers')}</button></div>
           <div class="page-actions"><div class="page-actions-left"><div class="search-box">${icon('search')}<input class="input" id="txSearch" value="${attr(state.txSearch)}" placeholder="${attr(t('searchTransactions'))}"></div><select class="select filter-select" id="txType"><option value="all">${t('allTypes')}</option>${types.map(type => `<option value="${type}" ${state.txType === type ? 'selected' : ''}>${esc(translateType(type))}</option>`).join('')}</select><div class="platform-filter">${platformInput('txPlatform', state.txPlatform === 'all' ? '' : state.txPlatform, false, t('allPlatforms'))}</div></div><div class="page-actions-right"><button class="btn btn-secondary" id="refreshTx">${icon('refresh')}${t('refresh')}</button><button class="btn btn-secondary" id="transferButton">${icon('transactions')}${t('transferBetweenAccounts')}</button><button class="btn btn-primary" id="addTxButton">${icon('plus')}${t('addTransaction')}</button></div></div>
-          ${transfers ? `<div class="summary-strip"><div class="summary-item"><small>${t('transferLegs')}</small><strong>${num(data?.total)}</strong></div></div>` : `<div class="summary-strip"><div class="summary-item"><small>${t('income')} · ${esc(currency)}</small><strong class="amount-positive money" data-sensitive="true">${money(summary.income, currency)}</strong></div><div class="summary-item"><small>${t('expense')} · ${esc(currency)}</small><strong class="amount-negative money" data-sensitive="true">${money(summary.expense, currency)}</strong></div><div class="summary-item"><small>${t('records')}</small><strong>${num(summary.recordCount)}</strong></div></div>`}<p class="data-note">${t('totalsAllRecords')} ${t('transferExcluded')}</p>
+          ${transfers ? `<div class="summary-strip"><div class="summary-item"><small>${t('transferLegs')}</small><strong>${num(data?.total)}</strong></div></div>` : `<div class="summary-strip"><div class="summary-item"><small>${t('income')} · ${esc(currency)}</small><strong class="amount-positive money" data-sensitive="true">${money(summary.income, currency)}</strong></div><div class="summary-item"><small>${t('expense')} · ${esc(currency)}</small><strong class="amount-negative money" data-sensitive="true">${money(summary.expense, currency)}</strong></div><div class="summary-item"><small>${t('records')}</small><strong>${num(summary.recordCount)}</strong></div></div>${renderExchangeReference(summary)}`}<p class="data-note">${t('totalsAllRecords')} ${t('transferExcluded')}</p>
           <section class="card table-card">${items.length ? `<div class="table-scroll"><table><thead><tr>${headings.map(([label, key]) => sortHeading(t(label), 'transactions', key)).join('')}${transfers ? `<th>${t('counterpartAccount')}</th>` : ''}<th>${t('actions')}</th></tr></thead><tbody>${items.map(x => renderTransactionRow(x, transfers)).join('')}</tbody></table></div>` : renderEmpty(t(filtered ? 'noMatching' : 'noData'), t(filtered ? 'noMatchingDesc' : 'noDataDesc'))}${pagination(data, 'transactions')}</section>
         </div>`;
     }

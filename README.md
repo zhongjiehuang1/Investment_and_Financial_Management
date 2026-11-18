@@ -25,6 +25,8 @@ Set these outside the repository and deployment archive:
 - Optional read-only `IAFM_API_KEYS` as semicolon-separated `id:generation:sha256hex` bindings. Generate a key with `scripts/export_user_data.py`; never publish raw keys.
 - Exchange rates default to the official free ECB daily reference feed, even if an old key is still present. `IAFM_EXCHANGE_RATE_PROVIDER=exchangerate-api` explicitly selects the legacy keyed provider, with `IAFM_EXCHANGE_RATE_API_KEY` or the protected `iafm/exchangeRateApiKey` context entry. Never place a provider key in source or logs. Preserve the versioned reference cache and its per-provider attempt budget across deployments. ECB is checked hourly; failed ECB fetches have a 15-minute minimum gate (the current hourly timer normally retries on its next tick). Keyed-provider attempts remain capped at once per 24 hours, including failures. Display the actual source/as-of date; reference values are not live trading prices.
 
+ECB reference data is converted from its EUR base into other bases and pairs; the interface and exported metadata must identify the ECB as the source and explain the conversion and any display rounding. The original data is available free from the ECB. If these data are included in documents sold to others, the [ECB website terms](https://www.ecb.europa.eu/services/using-our-site/disclaimer/html/index.en.html) require informing buyers that the original data is free before payment and whenever they access it.
+
 Existing numeric-only administrator/API bindings deliberately fail closed. During a controlled migration, bind each existing configured user to its current generation after backfill. Do not automatically bind a recycled ID to a new person.
 
 ## Current two-host deployment and transactions

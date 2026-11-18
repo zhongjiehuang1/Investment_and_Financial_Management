@@ -12,15 +12,15 @@ This helper does not establish an exclusive lock or safely reconcile an interrup
 
 ## Manual deployment sequence
 
-1. Back up the current system and verify the recovery evidence. Confirm which four WARs are the newly reviewed releases, and verify each SHA-256. Stage them through the reviewed WAR deployment procedure. This helper reads the WARs currently in `webapps`; it does not infer them from the historical `release-atomic` directory.
+1. Back up the current system and verify the recovery evidence. Confirm which five WARs are the newly reviewed releases, and verify each SHA-256. Stage them through the reviewed WAR deployment procedure. This helper reads the WARs currently in `webapps`; it does not infer them from the historical `release-atomic` directory.
 2. Stop the normal entry and Tomcat following the current operations guide. Verify Tomcat's unit is inactive, `MainPID` and `ControlPID` are zero, and its cgroup is empty. Ensure no administrator or service modifies the deployment while this procedure runs. The helper also checks these conditions.
 3. On each server separately, copy this script to a root-owned private staging path and verify its SHA-256 against the reviewed release. Create a **new**, root-owned mode-0600 manifest file containing only:
 
    ```json
-   {"wars":{"ROOT.war":"<64-lowercase-hex>","Investment_and_Financial_Management.war":"<64-lowercase-hex>","starhub.war":"<64-lowercase-hex>","ucost.war":"<64-lowercase-hex>"}}
+   {"wars":{"ROOT.war":"<64-lowercase-hex>","Investment_and_Financial_Management.war":"<64-lowercase-hex>","starhub.war":"<64-lowercase-hex>","ucost.war":"<64-lowercase-hex>","atlas.war":"<64-lowercase-hex>"}}
    ```
 
-   Replace each placeholder with the actual independently reviewed SHA-256. Verify the four installed `webapps` WARs match these values. Record the manifest's SHA-256 and a new UUID; never reuse an uncertain run ID. The same manifest can only be used on both hosts if the reviewed installed WAR hashes are identical.
+   Replace each placeholder with the actual independently reviewed SHA-256. Verify the five installed `webapps` WARs match these values. Record the manifest's SHA-256 and a new UUID; never reuse an uncertain run ID. The same manifest can only be used on both hosts if the reviewed installed WAR hashes are identical.
 4. Review the no-effect plan:
 
    ```sh
@@ -33,8 +33,8 @@ This helper does not establish an exclusive lock or safely reconcile an interrup
    sudo python3 -B /absolute/path/preexpand_wars.py --execute --run <UUID> --manifest /absolute/path/private-manifest.json --manifest-sha256 <MANIFEST-SHA256>
    ```
 
-6. Require `VERIFIED_TOMCAT_STOPPED`. Keep the private preimages until the new deployment has been independently verified and a safe rollback is no longer needed. Do not publish the server.xml preimage. Before starting, verify all four WARs and expanded trees again and ensure no stale staging directory or unexpected Context file exists. Never rely on tracker timestamps alone.
-7. Start Tomcat and the entry in the current documented order. Check the actual processes and readiness of all four applications, the exact loaded deployment resources, authenticated business reads, application writes as authorised, and actual startup time. This helper itself does not verify a Tomcat start, provider availability, application function, data consistency or performance. Repeat all checks on both servers; only then open normal service.
+6. Require `VERIFIED_TOMCAT_STOPPED`. Keep the private preimages until the new deployment has been independently verified and a safe rollback is no longer needed. Do not publish the server.xml preimage. Before starting, verify all five WARs and expanded trees again and ensure no stale staging directory or unexpected Context file exists. Never rely on tracker timestamps alone.
+7. Start Tomcat and the entry in the current documented order. Check the actual processes and readiness of the four admission-checked applications and the ATLAS static route, the exact loaded deployment resources, authenticated business reads, application writes as authorised, and actual startup time. This helper itself does not verify a Tomcat start, provider availability, application function, data consistency or performance. Repeat all checks on both servers; only then open normal service.
 8. If reverting, stop entry and Tomcat, inspect the private preimage and currently installed files, preserve any new data/configuration, and restore a previously verified matching WAR/tree/server.xml set. Do not reactivate an old directory beside a different WAR. Revalidate tracker, full content hashes and access permissions before restarting. Cleanup of the private preimages is a separate, reviewed action.
 
 Directories are root-owned, group `tomcat`, mode 0750; files are root-owned, group `tomcat`, mode 0640. The helper keeps physical disk free at or above 4,000,000,000 bytes after accounting for the uncompressed WAR contents, without claiming that privileged processes cannot consume reserved space.

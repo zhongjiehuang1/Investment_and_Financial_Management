@@ -1,5 +1,7 @@
 # Single database backup and isolated recovery
 
+**Server 1 package change:** Its MySQL server and bundled client packages were removed on 14 November 2026; the `codex-lab-mysql.service` mask remains. The active database, SQL backup and isolated restore binaries are on Server 2. The former Server 1 CLI is no longer available. The same-version offline package rollback is stored alongside these tools in `Manual_Rollback_Server1_MySQL_2026-11-14`; review it before any reinstallation.
+
 ## Scope
 
 The current design uses server 2 as the only production MySQL server. Server 1's MySQL service must remain masked. Both application hosts connect to server 2; they are not database replicas. This procedure does not use the former peer controller, its failover state, or server 1's old data directory.
@@ -12,15 +14,15 @@ Each component is independently sealed with the existing AES-GCM envelope and ve
 
 ## Recovery-key location on this Mac
 
-The two existing recovery-key copies have moved from the old `~/Documents/Server_Recovery_Keys/` directories. Do not copy them back or create substitute keys. Their current protected locations are recorded in the owner-only custody JSON below; the file contains paths, not the key bytes. Both copies remain on the same Mac and are not an independent-device or off-site backup. Preserve the custody file and its two key files during cleanup.
+The two existing recovery-key copies are stored in the owner-private local application-support directory. Do not copy them back or create substitute keys. Their current protected locations are recorded in the owner-only custody JSON below; the file contains paths, not the key bytes. Both copies remain on the same Mac and are not an independent-device or off-site backup. Preserve the custody file and its two key files during cleanup.
 
 ```sh
-CUSTODY_FILE="$HOME/Documents/Codex/2026-11-11/iafm-star-hub-ucost-zhongjie-portfolio/work/private-recovery/recovery-key-custody-946de4f5-2777-404d-acee-6a5460e3a896.json"
+CUSTODY_FILE="$HOME/Library/Application Support/ServerRecovery/Private/recovery-key-custody.json"
 test -f "$CUSTODY_FILE"
 stat -f '%Sp %Su %N' "$CUSTODY_FILE"
 ```
 
-The custody file must be an owner-owned regular file with mode 0600 and one link; its `primaryPath` and `secondaryPath` must be absolute and name two distinct owner-owned mode-0600 32-byte key files outside OneDrive. Both programs check these requirements and authenticate with both key copies. Use `--key-custody-file "$CUSTODY_FILE"` for each actual invocation. Without that option they still look at the obsolete historical default locations and will fail on the current Mac. Do not print, upload, copy or place key bytes, passwords or tokens in commands, logs, OneDrive or documents. A different Mac requires a separately secured custody file pointing to the correct existing keys; use its actual location rather than assuming this Mac's paths.
+The custody file must be an owner-owned regular file with mode 0600 and one link; its `primaryPath` and `secondaryPath` must be absolute and name two distinct owner-owned mode-0600 32-byte key files outside OneDrive. Both programs check these requirements and authenticate with both key copies. Use `--key-custody-file "$CUSTODY_FILE"` for each actual invocation. When omitted, both programs use this same new default custody file. Do not print, upload, copy or place key bytes, passwords or tokens in commands, logs, OneDrive or documents. A different Mac requires a separately secured custody file pointing to the correct existing keys; use its actual location rather than assuming this Mac's paths.
 
 ## Before a backup
 
@@ -40,8 +42,8 @@ The custody file must be an owner-owned regular file with mode 0600 and one link
    python3 -B single_database_backup.py --execute --run <NEW-UUID> --writers-stopped --key-custody-file "$CUSTODY_FILE"
    ```
 
-6. On `COMPLETE`, inspect the reported `Databases_Backup_YYYY-MM-DD/Current_Production_Database` folder and its `MANIFEST.json`. It should contain four `.GCM` components: SQL, all-account/grants reference, Server 1 configuration, and Server 2 configuration; each must report verification using both recovery keys. The script refuses to replace an existing current backup; never remove or overwrite an existing backup before the replacement passes the required isolated restore and has been reviewed. Verify their ciphertext hashes against the manifest. Only after reviewing the backup and the current application guide should services be restarted.
-7. If execution stops or reports `INCOMPLETE_DO_NOT_REPLAY`, preserve the owner-private run directory, partial encrypted outputs and exclusive lock. They are evidence, not a completed backup. Inspect them and both hosts before making a new decision; do not repeat the same operation or remove the lock blindly. Plaintext is stored only in the owner-private Mac run directory, never in OneDrive. Owner-private temporary work is under `~/Documents/Server_Recovery_Work/Single_Database_Backup`, outside OneDrive. Successful completion removes only the exact four temporary plaintext components; encrypted files and evidence remain. Filesystem deletion is not a claim of physical erasure from SSD or system snapshots.
+6. On `COMPLETE`, inspect the reported `Historical_Archives/Database_Backups/backup-<RUN-UUID>` folder and its `MANIFEST.json`. It should contain four `.GCM` components: SQL, all-account/grants reference, Server 1 configuration, and Server 2 configuration; each must report verification using both recovery keys. Each run uses a unique destination and refuses to replace an existing backup; never remove or overwrite an existing backup before the replacement passes the required isolated restore and has been reviewed. Verify their ciphertext hashes against the manifest. Only after reviewing the backup and the current application guide should services be restarted.
+7. If execution stops or reports `INCOMPLETE_DO_NOT_REPLAY`, preserve the owner-private run directory, partial encrypted outputs and exclusive lock. They are evidence, not a completed backup. Inspect them and both hosts before making a new decision; do not repeat the same operation or remove the lock blindly. Plaintext is stored only in the owner-private Mac run directory, never in OneDrive. Owner-private temporary work and run evidence are under `~/Library/Application Support/ServerRecovery/Private/Work/Single_Database_Backup`, outside OneDrive. Successful completion removes only the exact four temporary plaintext components; encrypted files and evidence remain. Filesystem deletion is not a claim of physical erasure from SSD or system snapshots.
 
 ## Run the reviewed isolated restore check
 
@@ -50,13 +52,13 @@ This check uses `single_database_restore.py` and the eight exact package members
 1. First make the new backup with both application stacks stopped and Server 2 MySQL running, following the preceding steps. Record the absolute directory and SHA-256 of that backup's `MANIFEST.json`; preserve earlier recovery copies. The four ciphertexts must remain byte-identical. The subsequent isolated test checks SQL/schema and BLOB content fingerprints and inventory from this exact snapshot; it does not prove application login, cloud rebuild, or complete grants/routine behavior.
 2. Stop the Server 2 monitor and MySQL, and keep both application entries, checkers and Tomcats stopped. Temporarily mask the Server 2 MySQL and the application units on both hosts, verify their effective mask and empty cgroups; Server 1 MySQL must remain **permanently** masked. No application writer, administrative writer or unrelated MySQL may run. The restore inventory checks both nodes and refuses stale or unmasked states. Keep SSH and reserve services available.
 3. Inspect disk and memory on Server 2 and free Mac private work space. The present restore implementation explicitly requires physical free space of at least `max(8,000,000,000, 4,000,000,000 + 3 × expanded SQL bytes + compressed SQL bytes + 1 GiB)`, at least 1 GiB available RAM and 1 GiB free swap. This is the isolated test's separate conservative feasibility check, not the application's 4 GB reserve or an assertion that all 1 GiB is consumed. Do not run if it fails. Existing `/var/lib/mysql` must be an ordinary directory and the production datadir identity must match the inventory.
-4. In the project backup's `Investment_and_Financial_Management/ops/single-database` directory, inspect the default zero-effect plan:
+4. In this `Recovery_Tools` directory, inspect the default zero-effect plan:
 
    ```sh
    python3 -B single_database_restore.py
    ```
 
-   Verify `restore-package.json` SHA-256 against the reviewed release and inspect its eight member hashes. The reviewed package SHA-256 for this candidate is `41b87fc55ac181e4847840093f3941eaddf7153c1dbefec57cf0571ff1e484f2`; check the actual file again before use. The Node executable path is currently specific to this Mac. If it has moved, review an update and re-pin the package rather than bypassing validation. Do not expose the two recovery keys.
+   Verify `restore-package.json` SHA-256 against the reviewed release and inspect its eight member hashes. The reviewed package SHA-256 for this candidate is `65b6c161e5f18b5dc822cd552dc8cc2f5fb8a287dbbf9dd49415a5d0b7bceaa4`; check the actual file again before use. The Node executable path is currently specific to this Mac. If it has moved, review an update and re-pin the package rather than bypassing validation. Do not expose the two recovery keys.
 5. Generate one new UUID with `uuidgen`. Use the exact absolute backup directory and manifest hash; substitute the independently reviewed values and optional existing Server 1 control socket as appropriate:
 
    ```sh
@@ -85,6 +87,21 @@ During `start-db`, MySQL may report an active process before its socket accepts 
 
 The script requires both stacks healthy and Server 1 MySQL masked and stopped. It stops both entries, checkers and Tomcats, then Server 2's monitor and single MySQL. It cleans only the APT package download cache, journals older than 14 days after rotation, and eligible `catalina.YYYY-MM-DD.log` / `localhost.YYYY-MM-DD.log` files in the current project Tomcat's log directory when older than 14 days and not open. It retains current log directories. It does not delete databases, files in user libraries, keys, old datadirs, testing schemas, binlogs or transactions. It starts Server 2 MySQL and monitor and then both application stacks, checking local readiness for all four applications.
 
-Results are written to an owner-private run directory under `~/Documents/Server_Recovery_Work/Single_Database_Maintenance/`. Any failure or unknown result leaves the exclusive lock and a receipt; inspect both hosts and the receipt before deciding the next action rather than running again blindly. After every stop and cleanup step has a definite success result, the local `finally` block starts the database and verifies its identity before starting the applications. It does not reverse any failed or unknown remote step; an original stop may still be running. It cannot execute after a Mac process is forcibly killed or during sustained network loss. In either case, first determine whether the original remote worker and any systemd job have finished, reconcile the actual unit state and then follow the normal manual start sequence. The script is not a failover mechanism, disaster recovery test, full system cleanup, or fresh-host rebuild tool.
+Results are written to an owner-private run directory under `~/Library/Application Support/ServerRecovery/Private/Work/Single_Database_Maintenance/`. Any failure or unknown result leaves the exclusive lock and a receipt; inspect both hosts and the receipt before deciding the next action rather than running again blindly. After every stop and cleanup step has a definite success result, the local `finally` block starts the database and verifies its identity before starting the applications. It does not reverse any failed or unknown remote step; an original stop may still be running. It cannot execute after a Mac process is forcibly killed or during sustained network loss. In either case, first determine whether the original remote worker and any systemd job have finished, reconcile the actual unit state and then follow the normal manual start sequence. The script is not a failover mechanism, disaster recovery test, full system cleanup, or fresh-host rebuild tool.
 
 The stopped-state checks are point-in-time samples. They do not fence a privileged administrator or external automation from restarting services during maintenance; schedule an exclusive maintenance window and ensure no other operator or automation changes the stacks. The local sentinel prevents accidental overlap only on this Mac. Local admission checks establish current readiness, not a backup restore or an end-to-end authenticated business-operation test. The script deliberately retains recent journals and logs; it does not claim to remove every system log or cache.
+
+
+## Publish the flat dated database snapshot
+
+The date-stamped `Databases_Backup_YYYY-MM-DD` directory is the current **database-only** view. Its five files sit directly in that directory: encrypted SQL, encrypted account/grants reference, the manifest, an English database summary and the matching isolated-restore receipt. The source backup and selected server-configuration archives remain under `Historical_Archives/Database_Backups`. System schemas are not dumped wholesale, and the isolated restore is not a blank-host rebuild or a full verification of grants and routines.
+
+For each update, make a fresh quiescent encrypted backup using the procedure above. Use `flat_database_snapshot.py` to prepare a flat copy from that backup and its exact manifest hash. Perform the isolated restore against that flat manifest and place the resulting exact `completion.json` in the stage as `RESTORE_VERIFICATION.json`. Then run the following first without `--execute` to review its no-write plan; add `--execute` only when the receipt and paths are correct:
+
+```sh
+python3 -B publish_flat_database_snapshot.py --snapshot <ABSOLUTE-FLAT-STAGE> --manifest-sha256 <FLAT-MANIFEST-SHA256>
+```
+
+The publisher verifies encrypted component hashes, both-key authentication flags, the matching original isolated-restore receipt and the full source manifest. It stages verified copies, moves the previous dated folder intact to a uniquely named `History_...` directory in `Historical_Archives/Database_Backups`, and publishes the new flat folder with the backup's London date. It never deletes historical backups. If an operation is interrupted, preserve its private publication lock, intent and staged/archive paths; inspect their exact state before retrying. Confirm OneDrive has uploaded the files after publication.
+
+Neither this publisher nor the backup program is scheduled: new server backups are not automatic unless a separate verified scheduler has been configured.

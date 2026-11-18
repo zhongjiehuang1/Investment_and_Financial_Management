@@ -5,7 +5,7 @@ class Refusal(Exception):pass
 def need(x):
  if not x:raise Refusal('configuration capture refused')
 def allowed(p):
- s=str(p);return any(s==r or s.startswith(r+'/') for r in ['/var/lib/codex-validation/app-config','/var/lib/codex-validation/tls','/var/lib/codex-validation/entry-tls','/var/lib/codex-validation/tomcat-atomic/conf','/var/lib/codex-validation/peer','/var/lib/codex-validation/peer-home','/var/lib/codex-validation/private','/var/lib/codex-validation/single-database','/var/lib/codex-validation/system-safety','/etc/mysql','/etc/ssh','/etc/letsencrypt','/etc/sysctl.d','/etc/ufw','/usr/local/lib/systemd/system','/etc/systemd/system','/usr/local/lib/four-project','/usr/share/ca-certificates','/etc/ssl','/root/.ssh','/home/ubuntu/.ssh','/home/codex-peer/.ssh','/var/lib/four-project-entry-node1/private','/var/lib/four-project-entry-node2/private']) or s in ('/var/lib/codex-validation/entry-formal.json','/etc/nginx/mime.types','/etc/alternatives/my.cnf','/dev/null','/etc/apt/sources.list','/etc/apt/sources.list.d/mysql-official.list','/etc/apt/keyrings/mysql-official.gpg','/usr/share/keyrings/ubuntu-archive-keyring.gpg','/etc/apparmor.d/usr.sbin.mysqld','/etc/apparmor.d/local/usr.sbin.mysqld','/etc/fstab','/etc/sysctl.conf','/etc/nftables.conf','/etc/passwd','/etc/group','/etc/os-release','/usr/lib/os-release','/usr/lib/systemd/system/certbot.service','/usr/lib/systemd/system/certbot.timer','/usr/lib/systemd/system/ufw.service','/usr/lib/systemd/system/nftables.service')
+ s=str(p);return any(s==r or s.startswith(r+'/') for r in ['/var/lib/codex-validation/app-config','/var/lib/codex-validation/tls','/var/lib/codex-validation/entry-tls','/var/lib/codex-validation/tomcat-atomic/conf','/var/lib/codex-validation/peer','/var/lib/codex-validation/peer-home','/var/lib/codex-validation/private','/var/lib/codex-validation/single-database','/var/lib/codex-validation/system-safety','/etc/mysql','/etc/ssh','/etc/letsencrypt','/etc/sysctl.d','/etc/ufw','/usr/local/lib/systemd/system','/etc/systemd/system','/usr/local/lib/four-project','/usr/share/ca-certificates','/etc/ssl','/root/.ssh','/home/ubuntu/.ssh','/home/codex-peer/.ssh','/var/lib/four-project-entry-node1/private','/var/lib/four-project-entry-node2/private']) or s in ('/var/lib/codex-validation/entry-formal.json','/etc/atlas/entry.conf','/etc/nginx/mime.types','/etc/alternatives/my.cnf','/dev/null','/etc/apt/sources.list','/etc/apt/sources.list.d/mysql-official.list','/etc/apt/keyrings/mysql-official.gpg','/usr/share/keyrings/ubuntu-archive-keyring.gpg','/etc/apparmor.d/usr.sbin.mysqld','/etc/apparmor.d/local/usr.sbin.mysqld','/etc/fstab','/etc/sysctl.conf','/etc/nftables.conf','/etc/passwd','/etc/group','/etc/os-release','/usr/lib/os-release','/usr/lib/systemd/system/certbot.service','/usr/lib/systemd/system/certbot.timer','/usr/lib/systemd/system/ufw.service','/usr/lib/systemd/system/nftables.service')
 def checkpath(p):
  need(p.is_absolute() and '..' not in p.parts and allowed(p));return p
 chosen={};visiting=set()
@@ -79,7 +79,11 @@ def main():
   if hook.exists():tree(hook)
  required=['iafm-cluster.properties',f'iafm-node{node}-environment.json','starhub.properties','starhub-security.json','ucost.properties','mysql-ca.pem','mysql-trust.p12','tomcat-atomic.env','security/tester-password']
  for name in required:add(B/'app-config'/name)
- for name in ('security/dbip-country-lite.mmdb',):optional(B/'app-config'/name)
+ for name in ('security/dbip-country-lite.mmdb','atlas.properties'):optional(B/'app-config'/name)
+ if P('/etc/atlas/entry.conf').exists():
+  add(P('/etc/atlas/entry.conf'))
+  for name in ('fullchain.pem','privkey.pem'):add(P('/etc/letsencrypt/live/atlas.zhongjiehuang.com')/name)
+  add(P('/etc/letsencrypt/renewal/atlas.zhongjiehuang.com.conf'))
  for root in (B/'tls',B/'entry-tls',B/'tomcat-atomic/conf'):tree(root)
  for root in (B/'peer',B/'peer-home'):
   need(root.is_dir() and not root.is_symlink());add(root)

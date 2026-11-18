@@ -98,6 +98,30 @@ public class PublicReferenceReadTest {
         assertEquals(20.0, ExchangeRateForVariousCurrencies.currencyConversion("CNY", 1.0, "GBP"), 0);
     }
 
+    @Test public void publicEcbRatesIdentifyTheirSourceAndCalculatedCurrencyBases() throws Exception {
+        for (String path : List.of("/getExchangeRate", "/getExchangeRates")) {
+            Fixture fixture = new Fixture(path, "GET");
+            Object servlet = path.equals("/getExchangeRate")
+                    ? new Controller.RegisterAndLogin.GetExchangeRate()
+                    : new Controller.RegisterAndLogin.GetExchangeRates();
+            Method read = servlet.getClass().getDeclaredMethod("doGet", HttpServletRequest.class, HttpServletResponse.class);
+            read.setAccessible(true);
+            read.invoke(servlet, fixture.request(), fixture.response());
+            assertEquals(200, fixture.status);
+            JSONObject body = fixture.body();
+            JSONObject reference = path.equals("/getExchangeRate") ? body.getJSONObject("reference") : body;
+            assertEquals("ecb", reference.getString("source"));
+            assertEquals("European Central Bank (ECB)", reference.getString("sourceName"));
+            assertTrue(reference.getString("sourceUrl").startsWith("https://www.ecb.europa.eu/"));
+            assertTrue(reference.getBoolean("sourceFreeOfCharge"));
+            assertTrue(reference.getBoolean("modified"));
+            assertTrue(reference.getString("modification").contains("converted"));
+        }
+        JSONObject other = ExchangeRateForVariousCurrencies.discloseSource(new JSONObject(), "exchangerate-api");
+        assertFalse(other.has("sourceName"));
+        assertFalse(other.has("modified"));
+    }
+
     @Test public void admissionRejectionBeforeReadDoesNotExecuteAction() {
         rejectFrom = 1; AtomicBoolean ran = new AtomicBoolean(); Fixture f = new Fixture("/getExchangeRates", "GET");
         ApiSupport.servePublicRead(f.request(), f.response(), (user,input) -> { ran.set(true); return new JSONObject(); });

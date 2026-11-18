@@ -8,7 +8,7 @@ SSH1=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','root@8.211.120.109']
 SSH2=['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','-i',KEY,HOST]
 KEYS=[Path.home()/'Documents/Server_Recovery_Keys/Primary/archive-master.key',Path.home()/'Documents/Server_Recovery_Keys/Secondary/archive-master.key']
 NODE=Path('/Users/zhongjiehuang/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node')
-ROOT=Path.home()/'Documents/Server_Recovery_Work/Single_Database_Restore'
+ROOT=Path.home()/'Library/Application Support/ServerRecovery/Private/Work/Single_Database_Restore'
 def need(ok,code):
  if not ok:raise RuntimeError(code)
 def sha(path):
@@ -32,8 +32,8 @@ if not a.execute:
 need(a.expected_package_sha256 and re.fullmatch('[0-9a-f]{64}',a.expected_package_sha256) and sha(D/'restore-package.json')==a.expected_package_sha256,'REVIEWED_PACKAGE_REQUIRED')
 package=json.loads((D/'restore-package.json').read_bytes());need(package.get('format')=='single-database-isolated-restore-package-v1' and set(package.get('files',{}))=={'single_database_restore.py','restore_inventory.py','isolated_restore_worker.py','sql_import_validator.py','isolated_data_digest.py','atomic_attestation.py','recovery_envelope.cjs','schema_fingerprint.py'} and all(re.fullmatch('[A-Za-z0-9_.-]+',name) and sha(D/name)==value for name,value in package['files'].items()),'PACKAGE_SOURCE_CHANGED')
 need(a.cleanup_after_pass and a.backup and a.backup.is_absolute() and a.run and a.run.version==4 and a.manifest_sha256 and re.fullmatch('[0-9a-f]{64}',a.manifest_sha256),'EXPLICIT_BINDINGS_REQUIRED')
-if a.key_custody_file:
- secure_file(a.key_custody_file);need(a.key_custody_file.stat().st_size<=65536,'CUSTODY_FILE_TOO_LARGE');custody=json.loads(a.key_custody_file.read_bytes());KEYS=[Path(custody['primaryPath']),Path(custody['secondaryPath'])];need(all(k.is_absolute() for k in KEYS),'ABSOLUTE_KEY_PATH_REQUIRED')
+custody_path=a.key_custody_file or (Path.home()/'Library/Application Support/ServerRecovery/Private/recovery-key-custody.json')
+secure_file(custody_path);need(custody_path.stat().st_size<=65536,'CUSTODY_FILE_TOO_LARGE');custody=json.loads(custody_path.read_bytes());KEYS=[Path(custody['primaryPath']),Path(custody['secondaryPath'])];need(all(k.is_absolute() for k in KEYS),'ABSOLUTE_KEY_PATH_REQUIRED')
 if a.server1_control_socket:SSH1[1:1]=['-S',a.server1_control_socket]
 manifest_path=a.backup/'MANIFEST.json';secure_file(manifest_path);need(sha(manifest_path)==a.manifest_sha256,'BACKUP_MANIFEST_CHANGED');manifest=json.loads(manifest_path.read_bytes())
 need(manifest.get('format')=='single-server-database-backup-v1' and manifest.get('mysqlUuid')=='5b042440-ddee-11f1-8a71-06ffe4b75559' and manifest.get('sourceContentDigestBeforeAndAfterDumpMatch') is True and manifest.get('sourceContentDigestAlgorithm')=='mysql-ordered-dump-data-sha256-v1' and re.fullmatch('[0-9a-f]{64}',manifest.get('sourceContentSha256','')),'BACKUP_CONTENT_PROOF_REQUIRED')
