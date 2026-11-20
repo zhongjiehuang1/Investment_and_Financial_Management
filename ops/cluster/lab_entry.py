@@ -515,9 +515,45 @@ http {{
     for app in APPS:
         text += f'        {config["applications"][app]["hostname"]} {app};\n'
     text += f'''    }}
+    map $host $portfolio_traffic_application {{
+        default unknown;
+'''
+    for app in APPS:
+        text += f'        {config["applications"][app]["hostname"]} {app};\n'
+    text += f'''        atlas.zhongjiehuang.com atlas;
+    }}
+    # Mark loopback health probes without recording the request path.
+    map "$remote_addr:$uri" $portfolio_traffic_probe {{
+        default 0;
+        "127.0.0.1:/__portfolio_traffic_probe" 1;
+    }}
+    # The address is sent only to the local ephemeral collector; it is not
+    # written to the durability log or included in public snapshots. Ignore
+    # known automated agents and monitoring endpoints for visitor estimates.
+    map $uri $portfolio_visitor_path {{
+        default 1;
+        ~^/api/portfolio-(?:metrics|history|visitors)/ 0;
+        /api/server 0;
+        /__portfolio_traffic_probe 0;
+    }}
+    map $http_user_agent $portfolio_visitor_agent {{
+        default 1;
+        ~*(?:bot|crawler|spider|slurp|bingpreview|headlesschrome|uptimerobot) 0;
+    }}
+    map "$portfolio_visitor_path:$portfolio_visitor_agent" $portfolio_visitor_eligible {{
+        default 0;
+        "1:1" 1;
+    }}
+    map $portfolio_visitor_eligible $portfolio_visitor_address {{
+        default "-";
+        1 $remote_addr;
+    }}
     log_format four_response_durability escape=json '{{"time":"$time_iso8601","application":"$four_audit_application","host":"$server_name","status":"$status","responseDurability":"$four_audit_durability"}}';
+    log_format portfolio_traffic escape=json '{{"time":"$time_iso8601","application":"$portfolio_traffic_application","trafficVersion":3,"monitorProbe":$portfolio_traffic_probe,"visitorEligible":$portfolio_visitor_eligible,"remoteAddr":"$portfolio_visitor_address"}}';
     # Static path: the root master opens it; workers inherit that descriptor.
     access_log {directory}/private/{AUDIT_FILENAME} four_response_durability;
+    access_log syslog:server=unix:/run/portfolio-traffic-{config['nodeId']}.sock,tag=portfoliotraffic,nohostname portfolio_traffic;
+    access_log syslog:server=unix:/run/portfolio-total-{config['nodeId']}.sock,tag=portfoliototal,nohostname portfolio_traffic;
     log_subrequest off;
     server_tokens off;
     # Only immutable public Portfolio asset routes use this response policy.
