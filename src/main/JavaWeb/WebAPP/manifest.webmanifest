@@ -1,0 +1,12 @@
+{
+  "name": "Investment & Financial Management Workspace",
+  "short_name": "Finance",
+  "description": "Private bilingual investment and financial management workspace.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "lang": "en",
+  "icons": [{"src":"assets/icons/favicon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}

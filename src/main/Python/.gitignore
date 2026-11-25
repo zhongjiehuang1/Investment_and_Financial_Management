@@ -1,0 +1,11 @@
+# Local owner-supplied financial source material. Never publish these files.
+**/private_data.json
+**/*.pdf
+**/*.xls
+**/*.xlsx
+**/*.csv
+**/.*checkpoint*.json
+**/private-transfer-plan.json
+**/*ledger*backup*.json
+**/__pycache__/
+

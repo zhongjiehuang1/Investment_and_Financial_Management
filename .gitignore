@@ -1,0 +1,20 @@
+/target/
+/dist/
+/.idea/
+*.iml
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Private financial inputs stay local; credentials stay outside distribution archives.
+**/private_*.json
+**/*checkpoint*.json
+**/*reconciliation*plan*.json
+src/main/Python/**/*.csv
+src/main/Python/**/*.xls
+src/main/Python/**/*.xlsx
+src/main/Python/**/*.pdf
