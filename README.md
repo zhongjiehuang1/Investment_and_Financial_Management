@@ -33,7 +33,7 @@ Both hosts run the same application and use Server 2's single production MySQL o
 
 `transaction.backend=atomic` keeps the two logical finance schemas, shared transaction guard, identity generations, operation UUID and result in one InnoDB transaction on that one physical database. Concurrent modifications use revision and generation checks. A known rolled-back operation may follow the documented retry policy; for an unknown result retain the original operation ID and query its result before deciding whether to retry. Do not infer rollback from a timeout. Successful writes have single-database durability, not dual-node database confirmation. Each application JVM uses a bounded connection pool of at most four connections and a bounded 64-entry prepared-statement cache; these limits do not guarantee a specific latency under load.
 
-For current operations and rebuild steps see local OneDrive `Linux_Server_2026-11-24/README.md`. The checked-in `ops/single-database` directory contains the reviewed single-database backup, isolated restore and limited maintenance tools; follow their safety prerequisites and current receipts. A successful build or an encrypted backup alone is not proof of recovery.
+For current operations and rebuild steps see local OneDrive `Linux_Server_*/README.md`. The checked-in `ops/single-database` directory contains the reviewed single-database backup, isolated restore and limited maintenance tools; follow their safety prerequisites and current receipts. A successful build or an encrypted backup alone is not proof of recovery.
 
 ## Maintenance and migration
 
